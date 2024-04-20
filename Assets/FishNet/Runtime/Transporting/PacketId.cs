@@ -14,19 +14,21 @@ namespace FishNet.Transporting
         Split = 2,
         ObjectSpawn = 3,
         ObjectDespawn = 4,
-        Event = 5,
-        SyncVar = 6,
-        ServerRpc = 7,
-        ObserversRpc = 8,
+        PredictedSpawnResult = 5,
+        SyncType = 7,
+        ServerRpc = 8,
+        ObserversRpc = 9,
         TargetRpc = 10,
         OwnershipChange = 11,
         Broadcast = 12,
-        SyncObject = 13,
+        UNUSED = 13,
         PingPong = 14,
         Replicate = 15,
         Reconcile = 16,
         Disconnect = 17,
-        TimingUpdate = 18
+        TimingUpdate = 18,
+        NetworkLODUpdate = 19,
+        StateUpdate = 20,
     }
 
 }

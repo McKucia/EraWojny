@@ -1,5 +1,6 @@
 ﻿using FishNet.Documenting;
 using FishNet.Managing.Logging;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace FishNet.Managing
@@ -27,98 +28,163 @@ namespace FishNet.Managing
         private void InitializeLogging()
         {
             if (_logging == null)
-                _logging = ScriptableObject.CreateInstance<LoggingConfiguration>();
+                _logging = ScriptableObject.CreateInstance<LevelLoggingConfiguration>();
             else
                 _logging = _logging.Clone();
 
-            _logging.InitializeOnceInternal();
+            _logging.InitializeOnce();
         }
 
-
-        /// <summary>
-        /// True if can log for loggingType.
-        /// </summary>
-        /// <param name="loggingType"></param>
-        /// <returns></returns>
-        [APIExclude]
-        public static bool StaticCanLog(LoggingType loggingType)
-        {
-            NetworkManager nm = InstanceFinder.NetworkManager;
-            if (nm == null || !nm.CanLog(loggingType))
-                return false;
-            else
-                return true;
-        }
 
         /// <summary>
         /// True if can log for loggingType.
         /// </summary>
         /// <param name="loggingType">Type of logging being filtered.</param>
         /// <returns></returns>
-        public bool CanLog(LoggingType loggingType)
+        internal bool InternalCanLog(LoggingType loggingType)
         {
-            if (_logging == null)
-                return true;
-            else
-                return _logging.CanLog(loggingType);
+            return _logging.CanLog(loggingType);
         }
 
         /// <summary>
         /// Performs a common log, should logging settings permit it.
         /// </summary>
-        /// <param name="o"></param>
-        public void Log(string txt)
+        internal void InternalLog(string value)
         {
-            if (CanLog(LoggingType.Common))
-            {
-                Debug.Log(txt);
-                WriteLog(LoggingType.Common, txt);
-            }
+            _logging.Log(value);
+        }
+
+        /// <summary>
+        /// Performs a log using the loggingType, should logging settings permit it.
+        /// </summary>
+        internal void InternalLog(LoggingType loggingType, string value)
+        {
+            if (loggingType == LoggingType.Common)
+                _logging.Log(value);
+            else if (loggingType == LoggingType.Warning)
+                _logging.LogWarning(value);
+            else if (loggingType == LoggingType.Error)
+                _logging.LogError(value);
         }
 
         /// <summary>
         /// Performs a warning log, should logging settings permit it.
         /// </summary>
-        /// <param name="o"></param>
-        public void LogWarning(string txt)
+        internal void InternalLogWarning(string value)
         {
-            if (CanLog(LoggingType.Warning))
-            {
-                Debug.LogWarning(txt);
-                WriteLog(LoggingType.Warning, txt);
-            }
+            _logging.LogWarning(value);
         }
 
         /// <summary>
         /// Performs an error log, should logging settings permit it.
         /// </summary>
-        /// <param name="o"></param>
-        public void LogError(string txt)
+        internal void InternalLogError(string value)
         {
-            if (CanLog(LoggingType.Error))
-            {
-                Debug.LogError(txt);
-                WriteLog(LoggingType.Error, txt);
-            }
+            _logging.LogError(value);
+        }
+    }
+
+    public static class NetworkManagerExtensions
+    {
+
+        /// <summary>
+        /// True if can log for loggingType.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool CanLog(this NetworkManager networkManager, LoggingType loggingType)
+        {
+            if (GetNetworkManager(ref networkManager))
+                return networkManager.InternalCanLog(loggingType);
+            else
+                return false;
         }
 
         /// <summary>
-        /// Writes log to file.
+        /// Performs a log using the loggingType, should logging settings permit it.
         /// </summary>
-        /// <param name="txt"></param>
-        private void WriteLog(LoggingType loggingType, string txt)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void Log(this NetworkManager networkManager, LoggingType loggingType, string value)
         {
-            string prefix;
             if (loggingType == LoggingType.Common)
-                prefix = COMMON_LOGGING_PREFIX;
+                networkManager.Log(value);
             else if (loggingType == LoggingType.Warning)
-                prefix = WARNING_LOGGING_PREFIX;
+                networkManager.LogWarning(value);
             else if (loggingType == LoggingType.Error)
-                prefix = ERROR_LOGGING_PREFIX;
-            else
-                prefix = string.Empty;
-
+                networkManager.LogError(value);
         }
+
+        /// <summary>
+        /// Performs a common log, should logging settings permit it.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void Log(this NetworkManager networkManager, string message)
+        {
+            if (GetNetworkManager(ref networkManager))
+                networkManager.InternalLog(message);
+            else
+                Debug.Log(message);
+        }
+        /// <summary>
+        /// Performs a warning log, should logging settings permit it.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogWarning(this NetworkManager networkManager, string message)
+        {
+            if (GetNetworkManager(ref networkManager))
+                networkManager.InternalLogWarning(message);
+            else
+                Debug.LogWarning(message);
+        }
+
+        /// <summary>
+        /// Performs an error log, should logging settings permit it.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogError(this NetworkManager networkManager, string message)
+        {
+            if (GetNetworkManager(ref networkManager))
+                networkManager.InternalLogError(message);
+            else
+                Debug.LogError(message);
+        }
+
+        /// <summary>
+        /// Gets a NetworkManager, first using a preferred option.
+        /// </summary>
+        /// <returns>True if a NetworkManager was found.</returns>
+        private static bool GetNetworkManager(ref NetworkManager preferredNm)
+        {
+            if (preferredNm != null)
+                return true;
+
+            preferredNm = InstanceFinder.NetworkManager;
+            return (preferredNm != null);
+        }
+
+        #region Backwards compatibility.
+        /// <summary>
+        /// Performs a common log, should logging settings permit it.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void Log(string msg) => NetworkManagerExtensions.Log(null, msg);
+        /// <summary>
+        /// Performs a warning log, should logging settings permit it.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogWarning(string msg) => NetworkManagerExtensions.LogWarning(null, msg);
+        /// <summary>
+        /// Performs an error log, should logging settings permit it.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogError(string msg) => NetworkManagerExtensions.LogError(null, msg);
+        /// <summary>
+        /// True if can log for loggingType.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool CanLog(LoggingType lt) => NetworkManagerExtensions.CanLog(null, lt);
+
+
+        #endregion
     }
 
 }

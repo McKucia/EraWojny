@@ -10,6 +10,10 @@ namespace FishNet.Managing.Scened
     public class SceneUnloadData
     {
         /// <summary>
+        /// When specified these scenes will be set as the active scene after loading occurs.
+        /// </summary>
+        public PreferredScene PreferredActiveScene;
+        /// <summary>
         /// SceneLookupData for each scene to load.
         /// </summary>
         public SceneLookupData[] SceneLookupDatas = new SceneLookupData[0];
@@ -41,6 +45,14 @@ namespace FishNet.Managing.Scened
         /// </summary>
         /// <param name="sceneHandle">Scene to unload by handle.</param>
         public SceneUnloadData(int sceneHandle) : this(new int[] { sceneHandle }) { }
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="sceneLookupData">Scene to unload by SceneLookupData.</param>
+        public SceneUnloadData(SceneLookupData sceneLookupData)
+        {
+            SceneLookupDatas = new SceneLookupData[] { sceneLookupData };
+        }
         /// <summary>
         /// 
         /// </summary>

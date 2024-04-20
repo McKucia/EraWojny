@@ -1,5 +1,5 @@
 ﻿using FishNet.Connection;
-using FishNet.Utility.Constant;
+using FishNet.Utility;
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo(UtilityConstants.GENERATED_ASSEMBLY_NAME)]
@@ -35,7 +35,7 @@ namespace FishNet.Managing.Scened
         [System.NonSerialized]
         public readonly bool AsServer;
 
-        internal UnloadQueueData() { }
+        public UnloadQueueData() { }
         internal UnloadQueueData(SceneScopeType scopeType, NetworkConnection[] conns, SceneUnloadData sceneUnloadData, string[] globalScenes, bool asServer)
         {
             ScopeType = scopeType;

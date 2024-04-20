@@ -11,22 +11,26 @@ namespace FishNet.Managing.Server.Editing
     public class ServerManagerEditor : Editor
     {
         private SerializedProperty _authenticator;
-        private SerializedProperty _spawnPacking;
+        private SerializedProperty _remoteClientTimeout;
+        private SerializedProperty _remoteClientTimeoutDuration;
+        private SerializedProperty _syncTypeRate;
+        private SerializedProperty SpawnPacking;
         private SerializedProperty _changeFrameRate;
         private SerializedProperty _frameRate;
         private SerializedProperty _shareIds;
         private SerializedProperty _startOnHeadless;
-        private SerializedProperty _limitClientMTU;
 
         protected virtual void OnEnable()
         {
-            _authenticator = serializedObject.FindProperty("_authenticator");
-            _spawnPacking = serializedObject.FindProperty("SpawnPacking");
-            _changeFrameRate = serializedObject.FindProperty("_changeFrameRate");
-            _frameRate = serializedObject.FindProperty("_frameRate");
-            _shareIds = serializedObject.FindProperty("_shareIds");
-            _startOnHeadless = serializedObject.FindProperty("_startOnHeadless");
-            _limitClientMTU = serializedObject.FindProperty("_limitClientMTU");
+            _authenticator = serializedObject.FindProperty(nameof(_authenticator));
+            _remoteClientTimeout = serializedObject.FindProperty(nameof(_remoteClientTimeout));           
+            _remoteClientTimeoutDuration = serializedObject.FindProperty(nameof(_remoteClientTimeoutDuration));
+            _syncTypeRate = serializedObject.FindProperty(nameof(_syncTypeRate));
+            SpawnPacking = serializedObject.FindProperty(nameof(SpawnPacking));
+            _changeFrameRate = serializedObject.FindProperty(nameof(_changeFrameRate));
+            _frameRate = serializedObject.FindProperty(nameof(_frameRate));
+            _shareIds = serializedObject.FindProperty(nameof(_shareIds));
+            _startOnHeadless = serializedObject.FindProperty(nameof(_startOnHeadless));
         }
 
         public override void OnInspectorGUI()
@@ -37,9 +41,19 @@ namespace FishNet.Managing.Server.Editing
             EditorGUILayout.ObjectField("Script:", MonoScript.FromMonoBehaviour((ServerManager)target), typeof(ServerManager), false);
             GUI.enabled = true;
 
+            EditorGUILayout.LabelField("Settings", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
 
             EditorGUILayout.PropertyField(_authenticator);
-            EditorGUILayout.PropertyField(_spawnPacking);
+            EditorGUILayout.PropertyField(_remoteClientTimeout);
+            if ((RemoteTimeoutType)_remoteClientTimeout.intValue != RemoteTimeoutType.Disabled)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.PropertyField(_remoteClientTimeoutDuration,new GUIContent("Timeout"));
+                EditorGUI.indentLevel--;
+            }
+            EditorGUILayout.PropertyField(_syncTypeRate);
+            EditorGUILayout.PropertyField(SpawnPacking);
             EditorGUILayout.PropertyField(_changeFrameRate);
             if (_changeFrameRate.boolValue)
             {
@@ -49,9 +63,9 @@ namespace FishNet.Managing.Server.Editing
             }
             EditorGUILayout.PropertyField(_shareIds);
             EditorGUILayout.PropertyField(_startOnHeadless);
-            EditorGUILayout.PropertyField(_limitClientMTU);
 
-            EditorGUILayout.Space();
+            EditorGUI.indentLevel--;
+
 
             serializedObject.ApplyModifiedProperties();
         }

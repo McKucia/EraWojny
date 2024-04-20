@@ -1,26 +1,22 @@
 using FishNet.Object;
 using UnityEngine;
 
-public class CameraMovement : NetworkBehaviour
+public class CameraMovement : MonoBehaviour
 {
+    [SerializeField] float cameraBound;
+
     Vector3 cameraFollowPosition = Vector3.zero;
-    const float cameraBound = 32f;
-    const float maxSpeed = 50f;
-    const float accelSpeed = 7f;
+    const float maxSpeed = 80f;
+    const float accelSpeed = 10f;
     float scrollSpeed = 0;
 
-    public override void OnStartClient()
+    public void Init()
     {
-        base.OnStartClient();
-        if(base.IsOwner)
-            gameObject.SetActive(true);
+        gameObject.SetActive(true);
     }
 
     void Update()
-    {
-        if (!base.IsClient)
-            return;
-        
+    {   
         UpdateCameraPosition();
     }
 

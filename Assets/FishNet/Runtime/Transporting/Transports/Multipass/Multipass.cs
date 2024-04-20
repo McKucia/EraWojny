@@ -1,27 +1,46 @@
 using FishNet.Managing;
-using FishNet.Managing.Logging;
-using FishNet.Serializing;
-using FishNet.Utility.Extension;
+using GameKit.Dependencies.Utilities;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace FishNet.Transporting.Multipass
 {
+    [AddComponentMenu("FishNet/Transport/Multipass")]
     public class Multipass : Transport
     {
         #region Types.
-        public struct TransportIdData
+        public struct ClientTransportData : IEquatable<ClientTransportData>
         {
-            public int MultipassId;
+            /// <summary>
+            /// Transport index this connection is on.
+            /// </summary>
             public int TransportIndex;
+            /// <summary>
+            /// ConnectionId assigned by the transport.
+            /// </summary>
+            public int TransportId;
+            /// <summary>
+            /// Connection Id assigned by multipass. This Id is the one communicated to the NetworkManager.
+            /// </summary>
+            public int MultipassId;
+            /// <summary>
+            /// Cached hashcode for values.
+            /// </summary>
+            private int _hashCode;
 
-            public TransportIdData(int multipassId, int transportIndex)
+            public ClientTransportData(int transportIndex, int transportId, int multipassId)
             {
-                MultipassId = multipassId;
                 TransportIndex = transportIndex;
+                TransportId = transportId;
+                MultipassId = multipassId;
+                _hashCode = (transportIndex, transportId, multipassId).GetHashCode();
+            }
+
+            public bool Equals(ClientTransportData other)
+            {
+                return (_hashCode == other._hashCode);
             }
         }
         #endregion
@@ -48,7 +67,6 @@ namespace FishNet.Transporting.Multipass
                 //If not yet set.
                 if (_clientTransport == null)
                 {
-                    bool canLogError = base.NetworkManager.CanLog(LoggingType.Error);
                     //If there are transports to set from.
                     if (_transports.Count != 0)
                         _clientTransport = _transports[0];
@@ -57,23 +75,16 @@ namespace FishNet.Transporting.Multipass
                     * before accessing this. Transport should always be set
                     * manually rather than assuming the default client
                     * transport. */
-                    if (canLogError)
-                    {
-                        if (_clientTransport == null)
-                            Debug.LogError($"ClientTransport in Multipass could not be set to the first transport. This can occur if no trnasports are specified or if the first entry is null.");
-                        else
-                            Debug.LogError($"ClientTransport in Multipass is being automatically set to {_clientTransport.GetType()}. For production use SetClientTransport before attempting to access the ClientTransport.");
-                    }
+                    if (_clientTransport == null)
+                        base.NetworkManager.LogError($"ClientTransport in Multipass could not be set to the first transport. This can occur if no trnasports are specified or if the first entry is null.");
+                    else
+                        base.NetworkManager.LogError($"ClientTransport in Multipass is being automatically set to {_clientTransport.GetType()}. For production use SetClientTransport before attempting to access the ClientTransport.");
                 }
 
                 return _clientTransport;
             }
 
-            private set
-            {
-                _clientTransport = value;
-            }
-
+            private set => _clientTransport = value;
         }
         #endregion
 
@@ -87,22 +98,26 @@ namespace FishNet.Transporting.Multipass
         /// <summary>
         /// Transports to use.
         /// </summary>
-        public IReadOnlyCollection<Transport> Transports => _transports;
+        public IList<Transport> Transports => _transports;
         #endregion
 
         #region Private. 
         /// <summary>
-        /// Key is the transport connectionid, Value is the TransportIdData.
+        /// An unset/invalid ClientTransportData.
         /// </summary>
-        private Dictionary<int, TransportIdData> _multipassToTransport = new Dictionary<int, TransportIdData>();
+        private readonly ClientTransportData INVALID_CLIENTTRANSPORTDATA = new ClientTransportData(int.MinValue, int.MinValue, int.MinValue);
         /// <summary>
-        /// Key is the Multipass connectionId, Value is the transport connectionId.
+        /// MultipassId lookup.
         /// </summary>
-        private List<Dictionary<int, int>> _transportToMultipass = new List<Dictionary<int, int>>();
+        private Dictionary<int, ClientTransportData> _multpassIdLookup = new Dictionary<int, ClientTransportData>();
+        /// <summary>
+        /// TransportId lookup. Each index within the list is the same as the transport index.
+        /// </summary>
+        private List<Dictionary<int, ClientTransportData>> _transportIdLookup = new List<Dictionary<int, ClientTransportData>>();
         /// <summary>
         /// Ids available to new connections.
         /// </summary>
-        private Queue<int> _availableIds = new Queue<int>();
+        private Queue<int> _availableMultipassIds = new Queue<int>();
         #endregion
 
         #region Const.
@@ -121,31 +136,25 @@ namespace FishNet.Transporting.Multipass
             {
                 if (_transports[i] == null)
                 {
-                    if (base.NetworkManager.CanLog(LoggingType.Warning))
-                        Debug.LogWarning($"Transports contains a null entry on index {i}.");
+                    base.NetworkManager.LogWarning($"Transports contains a null entry on index {i}.");
                     _transports.RemoveAt(i);
                     i--;
                 }
             }
 
             //No transports to use.
-            if (Transports.Count == 0)
+            if (_transports.Count == 0)
             {
-                if (base.NetworkManager.CanLog(LoggingType.Error))
-                    Debug.LogError($"No transports are set within Multipass.");
+                base.NetworkManager.LogError($"No transports are set within Multipass.");
                 return;
             }
 
             //Create transportsToMultipass.
-            for (int i = 0; i < Transports.Count; i++)
+            for (int i = 0; i < _transports.Count; i++)
             {
-                Dictionary<int, int> dict = new Dictionary<int, int>();
-                _transportToMultipass.Add(dict);
-            }
-
-            //Initialize each transport.
-            for (int i = 0; i < Transports.Count; i++)
-            {
+                Dictionary<int, ClientTransportData> dict = new Dictionary<int, ClientTransportData>();
+                _transportIdLookup.Add(dict);
+                //Initialize transports and callbacks.
                 _transports[i].Initialize(networkManager, i);
                 _transports[i].OnClientConnectionState += Multipass_OnClientConnectionState;
                 _transports[i].OnServerConnectionState += Multipass_OnServerConnectionState;
@@ -158,12 +167,25 @@ namespace FishNet.Transporting.Multipass
         private void OnDestroy()
         {
             //Initialize each transport.
-            foreach (Transport t in Transports)
+            foreach (Transport t in _transports)
                 t.Shutdown();
+
+            ResetLookupCollections();
         }
 
 
         #region ClientIds.
+        /// <summary>
+        /// Resets lookup collections and caches potential garbage.
+        /// </summary>
+        private void ResetLookupCollections()
+        {
+            _multpassIdLookup.Clear();
+
+            for (int i = 0; i < _transportIdLookup.Count; i++)
+                _transportIdLookup[i].Clear();
+        }
+
         /// <summary>
         /// Clears ClientIds when appropriate.
         /// </summary>
@@ -172,7 +194,7 @@ namespace FishNet.Transporting.Multipass
             //Can only clear when every transport server isnt connected.
             if (!force)
             {
-                foreach (Transport t in Transports)
+                foreach (Transport t in _transports)
                 {
                     //Cannot clear if a server is running still.
                     if (t.GetConnectionState(true) == LocalConnectionState.Started)
@@ -180,9 +202,7 @@ namespace FishNet.Transporting.Multipass
                 }
             }
 
-            _multipassToTransport.Clear();
-            foreach (Dictionary<int, int> item in _transportToMultipass)
-                item.Clear();
+            ResetLookupCollections();
             CreateAvailableIds();
         }
 
@@ -190,36 +210,29 @@ namespace FishNet.Transporting.Multipass
         /// Gets the Multipass connectionId using a transport connectionid.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool GetMultipassId(int transportIndex, int transportId, out int multipassId)
+        private ClientTransportData GetDataFromTransportId(int transportIndex, int transportId)
         {
-            Dictionary<int, int> dict = _transportToMultipass[transportIndex];
-            if (!dict.TryGetValueIL2CPP(transportId, out multipassId))
-            {
-                multipassId = -1;
-                if (base.NetworkManager.CanLog(LoggingType.Error))
-                    Debug.LogError($"Multipass connectionId could not be found for transportIndex {transportIndex}, connectionId of {transportId}.");
+            Dictionary<int, ClientTransportData> dict = _transportIdLookup[transportIndex];
+            if (dict.TryGetValueIL2CPP(transportId, out ClientTransportData ctd))
+                return ctd;
 
-                return false;
-            }
-
-            return true;
+            //Fall through/fail.            
+            base.NetworkManager.LogError($"Multipass connectionId could not be found for transportIndex {transportIndex}, transportId of {transportId}.");
+            return INVALID_CLIENTTRANSPORTDATA;
         }
 
         /// <summary>
         /// Gets the TransportIdData using a Multipass connectionId.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool GetTransportIdData(int multipassId, out TransportIdData data)
+        private ClientTransportData GetDataFromMultipassId(int multipassId)
         {
-            if (!_multipassToTransport.TryGetValueIL2CPP(multipassId, out data))
-            {
-                //Fall through.
-                if (base.NetworkManager.CanLog(LoggingType.Error))
-                    Debug.LogError($"TransportIdData could not be found for Multiass connectionId of {multipassId}.");
-                return false;
-            }
+            if (_multpassIdLookup.TryGetValueIL2CPP(multipassId, out ClientTransportData ctd))
+                return ctd;
 
-            return true;
+            //Fall through/fail.
+            base.NetworkManager.LogError($"TransportIdData could not be found for Multipass connectionId of {multipassId}.");
+            return INVALID_CLIENTTRANSPORTDATA;
         }
         #endregion
 
@@ -228,13 +241,13 @@ namespace FishNet.Transporting.Multipass
         /// Gets the IP address of a remote connectionId.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public override string GetConnectionAddress(int connectionId)
+        public override string GetConnectionAddress(int multipassId)
         {
-            TransportIdData data;
-            if (!GetTransportIdData(connectionId, out data))
+            ClientTransportData ctd = GetDataFromMultipassId(multipassId);
+            if (ctd.Equals(INVALID_CLIENTTRANSPORTDATA))
                 return string.Empty;
 
-            return _transports[data.TransportIndex].GetConnectionAddress(connectionId);
+            return _transports[ctd.TransportIndex].GetConnectionAddress(ctd.TransportId);
         }
         /// <summary>
         /// Called when a connection state changes for the local client.
@@ -257,8 +270,7 @@ namespace FishNet.Transporting.Multipass
         {
             if (server)
             {
-                if (base.NetworkManager.CanLog(LoggingType.Error))
-                    Debug.LogError($"This method is not supported for server. Use GetConnectionState(server, transportIndex) instead.");
+                base.NetworkManager.LogError($"This method is not supported for server. Use GetConnectionState(server, transportIndex) instead.");
                 return LocalConnectionState.Stopped;
             }
 
@@ -272,26 +284,25 @@ namespace FishNet.Transporting.Multipass
         /// </summary>
         /// <param name="server">True if getting ConnectionState for the server.</param>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public LocalConnectionState GetConnectionState(bool server, int index)
+        public LocalConnectionState GetConnectionState(bool server, int transportIndex)
         {
-            if (!IndexInRange(index, true))
+            if (!IndexInRange(transportIndex, true))
                 return LocalConnectionState.Stopped;
 
-            return _transports[index].GetConnectionState(server);
+            return _transports[transportIndex].GetConnectionState(server);
         }
         /// <summary>
         /// Gets the current ConnectionState of a remote client on the server.
         /// </summary>
-        /// <param name="connectionId">ConnectionId to get ConnectionState for.</param>
+        /// <param name="multipassId">ConnectionId to get ConnectionState for.</param>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public override RemoteConnectionState GetConnectionState(int connectionId)
+        public override RemoteConnectionState GetConnectionState(int multipassId)
         {
-
-            TransportIdData data;
-            if (!GetTransportIdData(connectionId, out data))
+            ClientTransportData ctd = GetDataFromMultipassId(multipassId);
+            if (ctd.Equals(INVALID_CLIENTTRANSPORTDATA))
                 return RemoteConnectionState.Stopped;
 
-            return _transports[data.TransportIndex].GetConnectionState(connectionId);
+            return _transports[ctd.TransportIndex].GetConnectionState(ctd.TransportId);
         }
         /// <summary>
         /// Gets the current ConnectionState of a remote client on the server of the transport on index.
@@ -305,7 +316,6 @@ namespace FishNet.Transporting.Multipass
 
             return _transports[index].GetConnectionState(connectionId);
         }
-
 
         /// <summary>
         /// Handles a ConnectionStateArgs for the local client.
@@ -348,29 +358,51 @@ namespace FishNet.Transporting.Multipass
 
             int transportIndex = connectionStateArgs.TransportIndex;
             int transportId = connectionStateArgs.ConnectionId;
+            /* MultipassId is set to a new value when connecting
+             * or discovered value when disconnecting. */
             int multipassId;
-            Dictionary<int, int> transportToMultipassDict = _transportToMultipass[transportIndex];
+            Dictionary<int, ClientTransportData> transportToMultipass = _transportIdLookup[transportIndex];
 
             //Started.
             if (connectionStateArgs.ConnectionState == RemoteConnectionState.Started)
             {
-                multipassId = _availableIds.Dequeue();
-                transportToMultipassDict[transportId] = multipassId;
-                _multipassToTransport[multipassId] = new TransportIdData(transportId, transportIndex);
+                //Get a multipassId for new connections.
+                multipassId = _availableMultipassIds.Dequeue();
+                //Get and update a clienttransportdata.
+                ClientTransportData ctd = new ClientTransportData(transportIndex, transportId, multipassId);
+                //Assign the lookup for transportId/index.
+                transportToMultipass[transportId] = ctd;
+                //Assign the lookup for multipassId.
+                _multpassIdLookup[multipassId] = ctd;
+
+                //Update args to use multipassId before invoking.
+                connectionStateArgs.ConnectionId = multipassId;
+                OnRemoteConnectionState?.Invoke(connectionStateArgs);
+
             }
             //Stopped.
             else
             {
-                if (!GetMultipassId(transportIndex, transportId, out multipassId))
+                ClientTransportData ctd = GetDataFromTransportId(transportIndex, transportId);
+                /* If CTD could not be found then the connection
+                 * is not stored/known. Nothing further can be done; the event cannot
+                 * invoke either since Id is unknown. */
+                if (ctd.Equals(INVALID_CLIENTTRANSPORTDATA))
                     return;
 
-                _availableIds.Enqueue(multipassId);
-                transportToMultipassDict.Remove(transportId);
-                _multipassToTransport.Remove(multipassId);
-            }
+                //Add the multipassId back to the queue.
+                _availableMultipassIds.Enqueue(ctd.MultipassId);
+                transportToMultipass.Remove(transportId);
+                _multpassIdLookup.Remove(ctd.MultipassId);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                //Remove packets held for connection from latency simulator.
+                base.NetworkManager.TransportManager.LatencySimulator.RemovePendingForConnection(ctd.MultipassId);
+#endif
 
-            connectionStateArgs.ConnectionId = multipassId;
-            OnRemoteConnectionState?.Invoke(connectionStateArgs);
+                //Update args to use multipassId before invoking.
+                connectionStateArgs.ConnectionId = ctd.MultipassId;
+                OnRemoteConnectionState?.Invoke(connectionStateArgs);
+            }
         }
         #endregion
 
@@ -381,7 +413,7 @@ namespace FishNet.Transporting.Multipass
         /// <param name="server">True to process data received on the server.</param>
         public override void IterateIncoming(bool server)
         {
-            foreach (Transport t in Transports)
+            foreach (Transport t in _transports)
                 t.IterateIncoming(server);
         }
 
@@ -391,7 +423,7 @@ namespace FishNet.Transporting.Multipass
         /// <param name="server">True to process data received on the server.</param>
         public override void IterateOutgoing(bool server)
         {
-            foreach (Transport t in Transports)
+            foreach (Transport t in _transports)
                 t.IterateOutgoing(server);
         }
         #endregion
@@ -419,11 +451,11 @@ namespace FishNet.Transporting.Multipass
         /// <param name="receivedDataArgs"></param>
         private void Multipass_OnServerReceivedData(ServerReceivedDataArgs receivedDataArgs)
         {
-            int multipassId;
-            if (!GetMultipassId(receivedDataArgs.TransportIndex, receivedDataArgs.ConnectionId, out multipassId))
+            ClientTransportData ctd = GetDataFromTransportId(receivedDataArgs.TransportIndex, receivedDataArgs.ConnectionId);
+            if (ctd.Equals(INVALID_CLIENTTRANSPORTDATA))
                 return;
 
-            receivedDataArgs.ConnectionId = multipassId;
+            receivedDataArgs.ConnectionId = ctd.MultipassId;
             OnServerReceivedData?.Invoke(receivedDataArgs);
         }
         #endregion
@@ -445,13 +477,15 @@ namespace FishNet.Transporting.Multipass
         /// </summary>
         /// <param name="channelId"></param>
         /// <param name="segment"></param>
-        /// <param name="connectionId"></param>
+        /// <param name="multipassId"></param>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public override void SendToClient(byte channelId, ArraySegment<byte> segment, int connectionId)
+        public override void SendToClient(byte channelId, ArraySegment<byte> segment, int multipassId)
         {
-            TransportIdData data;
-            if (GetTransportIdData(connectionId, out data))
-                _transports[data.TransportIndex].SendToClient(channelId, segment, data.MultipassId);
+            ClientTransportData ctd = GetDataFromMultipassId(multipassId);
+            if (ctd.Equals(INVALID_CLIENTTRANSPORTDATA))
+                return;
+
+            _transports[ctd.TransportIndex].SendToClient(channelId, segment, ctd.TransportId);
         }
         #endregion
 
@@ -464,8 +498,7 @@ namespace FishNet.Transporting.Multipass
         {
             if (!GlobalServerActions)
             {
-                if (base.NetworkManager.CanLog(LoggingType.Error))
-                    Debug.LogError($"Method {methodText} is not supported while GlobalServerActions is false.");
+                base.NetworkManager.LogError($"Method {methodText} is not supported while GlobalServerActions is false.");
                 return false;
             }
             else
@@ -483,8 +516,7 @@ namespace FishNet.Transporting.Multipass
         {
             if (ClientTransport == null)
             {
-                if (base.NetworkManager.CanLog(LoggingType.Error))
-                    Debug.LogError($"ClientTransport is not set. Use SetClientTransport before calling {methodText}.");
+                base.NetworkManager.LogError($"ClientTransport is not set. Use SetClientTransport before calling {methodText}.");
                 return false;
             }
             else
@@ -497,9 +529,10 @@ namespace FishNet.Transporting.Multipass
         /// </summary>
         private void CreateAvailableIds()
         {
-            _availableIds.Clear();
-            for (int i = 0; i < short.MaxValue; i++)
-                _availableIds.Enqueue(i);
+            _availableMultipassIds.Clear();
+            //Reserve maxValue - 1 since some local transports use that.
+            for (int i = 0; i < (short.MaxValue - 1); i++)
+                _availableMultipassIds.Enqueue(i);
         }
 
         /// <summary>
@@ -585,28 +618,27 @@ namespace FishNet.Transporting.Multipass
         /// </summary>
         /// <param name="index"></param>
         /// <returns></returns>
-        public Transport GetTransport<T>()
+        public T GetTransport<T>()
         {
-            foreach (Transport t in Transports)
+            foreach (Transport t in _transports)
             {
                 if (t.GetType() == typeof(T))
-                    return t;
+                    return (T)(object)t;
             }
 
-            return null;
+            return default(T);
         }
         /// <summary>
-        /// Returns if the transport for connectId is a local transport.
+        /// Returns if the transport for connectionId is a local transport.
         /// While true several security checks are disabled.
         /// </summary>
-        public override bool IsLocalTransport(int connectionid)
+        public override bool IsLocalTransport(int multipassId)
         {
-            //If able to get transport data return value from transport.
-            if (GetTransportIdData(connectionid, out TransportIdData data))
-                return _transports[data.TransportIndex].IsLocalTransport(connectionid);
-            //Otherwise return false forcing checks.
-            else
+            ClientTransportData ctd = GetDataFromMultipassId(multipassId);
+            if (ctd.Equals(INVALID_CLIENTTRANSPORTDATA))
                 return false;
+
+            return _transports[ctd.TransportIndex].IsLocalTransport(ctd.TransportId);
         }
 
         /// <summary>
@@ -617,8 +649,7 @@ namespace FishNet.Transporting.Multipass
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override int GetMaximumClients()
         {
-            if (base.NetworkManager.CanLog(LoggingType.Error))
-                Debug.LogError($"This method is not supported. Use GetMaximumClients(transportIndex) instead.");
+            base.NetworkManager.LogError($"This method is not supported. Use GetMaximumClients(transportIndex) instead.");
 
             return -1;
         }
@@ -642,8 +673,7 @@ namespace FishNet.Transporting.Multipass
         /// <param name="value"></param>
         public override void SetMaximumClients(int value)
         {
-            if (base.NetworkManager.CanLog(LoggingType.Error))
-                Debug.LogError($"This method is not supported. Use SetMaximumClients(value, transportIndex) instead.");
+            base.NetworkManager.LogError($"This method is not supported. Use SetMaximumClients(value, transportIndex) instead.");
         }
         /// <summary>
         /// Sets maximum number of clients allowed to connect to the server. If applied at runtime and clients exceed this value existing clients will stay connected but new clients may not connect.
@@ -664,13 +694,12 @@ namespace FishNet.Transporting.Multipass
         /// <param name="address"></param>
         public override void SetClientAddress(string address)
         {
-            foreach (Transport t in Transports)
+            foreach (Transport t in _transports)
                 t.SetClientAddress(address);
         }
         public override void SetServerBindAddress(string address, IPAddressType addressType)
         {
-            if (base.NetworkManager.CanLog(LoggingType.Error))
-                Debug.LogError($"This method is not supported. Use SetServerBindAddress(address, transportIndex) instead.");
+            base.NetworkManager.LogError($"This method is not supported. Use SetServerBindAddress(address, transportIndex) instead.");
         }
         /// Sets which address the server will bind to.
         /// This is called on the transport of index.
@@ -688,8 +717,7 @@ namespace FishNet.Transporting.Multipass
         /// </summary>
         public override void SetPort(ushort port)
         {
-            if (base.NetworkManager.CanLog(LoggingType.Error))
-                Debug.LogError($"This method is not supported. Use SetPort(port, transportIndex) instead.");
+            base.NetworkManager.LogError($"This method is not supported. Use SetPort(port, transportIndex) instead.");
         }
         /// <summary>
         /// Sets which port to use on transport of index.
@@ -717,7 +745,7 @@ namespace FishNet.Transporting.Multipass
                     return false;
 
                 bool success = true;
-                for (int i = 0; i < Transports.Count; i++)
+                for (int i = 0; i < _transports.Count; i++)
                 {
                     if (!StartConnection(true, i))
                         success = false;
@@ -742,7 +770,7 @@ namespace FishNet.Transporting.Multipass
         public bool StartConnection(bool server, int index)
         {
             if (server)
-            { 
+            {
                 return StartServer(index);
             }
             else
@@ -768,7 +796,7 @@ namespace FishNet.Transporting.Multipass
                     return false;
 
                 bool success = true;
-                for (int i = 0; i < Transports.Count; i++)
+                for (int i = 0; i < _transports.Count; i++)
                 {
                     if (!StopConnection(true, i))
                         success = false;
@@ -823,8 +851,13 @@ namespace FishNet.Transporting.Multipass
         {
             if (sendDisconnectMessage)
             {
-                //Get connectionIds as ServerManager knows them.
-                int[] multipassIds = _transportToMultipass[transportIndex].Keys.ToArray();
+                //Get dictionary for transportIndex.
+                Dictionary<int, ClientTransportData> dict = _transportIdLookup[transportIndex];
+                //Create an array containing all multipass Ids for transportIndex.
+                int[] multipassIds = new int[dict.Count];
+                int index = 0;
+                foreach (ClientTransportData item in dict.Values)
+                    multipassIds[index++] = item.MultipassId;
                 //Tell serve manager to write disconnect for those ids.
                 base.NetworkManager.ServerManager.SendDisconnectMessages(multipassIds);
                 //Iterate outgoing on transport which is being stopped.
@@ -839,7 +872,7 @@ namespace FishNet.Transporting.Multipass
         /// </summary>
         public override void Shutdown()
         {
-            foreach (Transport t in Transports)
+            foreach (Transport t in _transports)
             {
                 //Stops client then server connections.
                 t.StopConnection(false);
@@ -892,15 +925,15 @@ namespace FishNet.Transporting.Multipass
         /// <summary>
         /// Stops a remote client on the server.
         /// </summary>
-        /// <param name="connectionId"></param>
+        /// <param name="multipassId"></param>
         /// <param name="immediately">True to abrutly stp the client socket without waiting socket thread.</param>
-        private bool StopClient(int connectionId, bool immediately)
+        private bool StopClient(int multipassId, bool immediately)
         {
-            TransportIdData data;
-            if (!GetTransportIdData(connectionId, out data))
+            ClientTransportData ctd = GetDataFromMultipassId(multipassId);
+            if (ctd.Equals(INVALID_CLIENTTRANSPORTDATA))
                 return false;
 
-            return _transports[data.TransportIndex].StopConnection(connectionId, immediately);
+            return _transports[ctd.TransportIndex].StopConnection(ctd.TransportId, immediately);
         }
         #endregion
         #endregion
@@ -938,10 +971,10 @@ namespace FishNet.Transporting.Multipass
         /// </summary>
         private bool IndexInRange(int index, bool error)
         {
-            if (index >= Transports.Count || index < 0)
+            if (index >= _transports.Count || index < 0)
             {
-                if (error && base.NetworkManager.CanLog(LoggingType.Error))
-                    Debug.LogError($"Index of {index} is out of Transports range.");
+                if (error)
+                    base.NetworkManager.LogError($"Index of {index} is out of Transports range.");
                 return false;
             }
             else

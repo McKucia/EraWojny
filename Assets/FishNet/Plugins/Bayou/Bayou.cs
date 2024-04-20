@@ -270,14 +270,9 @@ namespace FishNet.Transporting.Bayou
         public override void SetMaximumClients(int value)
         {
             if (_server.GetConnectionState() != LocalConnectionState.Stopped)
-            {
-                if (base.NetworkManager.CanLog(LoggingType.Warning))
-                    Debug.LogWarning($"Cannot set maximum clients when server is running.");
-            }
+                base.NetworkManager.LogWarning($"Cannot set maximum clients when server is running.");
             else
-            {
                 _maximumClients = value;
-            }
         }
         /// <summary>
         /// Sets which address the client will connect to.
@@ -377,6 +372,7 @@ namespace FishNet.Transporting.Bayou
         /// </summary>
         private bool StartServer()
         {
+            Debug.Log("start server");
             SslConfiguration config;
 #if UNITY_SERVER
             config = _sslConfiguration;
@@ -434,8 +430,7 @@ namespace FishNet.Transporting.Bayou
         {
             if (channelId < 0 || channelId >= TransportManager.CHANNEL_COUNT)
             {
-                if (NetworkManager.CanLog(LoggingType.Warning))
-                    Debug.LogWarning($"Channel of {channelId} is out of range of supported channels. Channel will be defaulted to reliable.");
+                base.NetworkManager.LogWarning($"Channel of {channelId} is out of range of supported channels. Channel will be defaulted to reliable.");
                 channelId = 0;
             }
         }

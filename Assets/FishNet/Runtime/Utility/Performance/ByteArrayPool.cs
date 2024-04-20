@@ -15,7 +15,7 @@ namespace FishNet.Utility.Performance
         private static Queue<byte[]> _byteArrays = new Queue<byte[]>();
 
         /// <summary>
-        /// Returns a byte array which will be of at lesat minimum length. The returns array must manually be stored.
+        /// Returns a byte array which will be of at lesat minimum length. The returned array must manually be stored.
         /// </summary>
         public static byte[] Retrieve(int minimumLength)
         {
@@ -38,6 +38,12 @@ namespace FishNet.Utility.Performance
         /// </summary>
         public static void Store(byte[] buffer)
         {
+            /* Holy cow that's a lot of buffered
+             * buffers. This wouldn't happen under normal
+             * circumstances but if the user is stress
+             * testing connections in one executable perhaps. */
+            if (_byteArrays.Count > 300)
+                return;
             _byteArrays.Enqueue(buffer);
         }
 

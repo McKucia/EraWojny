@@ -2,6 +2,7 @@
 
 namespace FishNet.Object.Prediction
 {
+#if PREDICTION_1
     /// <summary>
     /// Replicated methods are to be called from clients and will run the same data and logic on the server.
     /// Only data used as method arguments will be serialized.
@@ -10,9 +11,9 @@ namespace FishNet.Object.Prediction
     public class ReplicateAttribute : Attribute 
     {
         /// <summary>
-        /// How many past datas to resend.
+        /// True to allow running input passed in with asServer true when there is no owner.
         /// </summary>
-        public byte Resends = 5;
+        public bool AllowServerControl = false;
     }
     /// <summary>
     /// Reconcile methods indicate how to reset your script or object after the server has replicated user data.
@@ -20,10 +21,18 @@ namespace FishNet.Object.Prediction
     [AttributeUsage(AttributeTargets.Method, Inherited = true, AllowMultiple = false)]
     public class ReconcileAttribute : Attribute 
     {
-        /// <summary>
-        /// How many times to resend reconcile.
-        /// </summary>
-        public byte Resends = 3;
     }
-
+#else
+    /// <summary>
+    /// Replicated methods are to be called from clients and will run the same data and logic on the server.
+    /// Only data used as method arguments will be serialized.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method, Inherited = true, AllowMultiple = false)]
+    public class ReplicateAttribute : Attribute { }
+    /// <summary>
+    /// Reconcile methods indicate how to reset your script or object after the server has replicated user data.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method, Inherited = true, AllowMultiple = false)]
+    public class ReconcileAttribute : Attribute { }
+#endif
 }

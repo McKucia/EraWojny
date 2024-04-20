@@ -6,6 +6,7 @@ namespace FishNet.Component.Utility
     /// <summary>
     /// Add to any object to display current ping(round trip time).
     /// </summary>
+    [AddComponentMenu("FishNet/Component/PingDisplay")]
     public class PingDisplay : MonoBehaviour
     {
         #region Types.
@@ -20,22 +21,28 @@ namespace FishNet.Component.Utility
 
         #region Serialized.
         /// <summary>
+        /// Color for text.
+        /// </summary>
+        [Tooltip("Color for text.")]
+        [SerializeField]
+        private Color _color = Color.white;
+        /// <summary>
         /// Which corner to display ping in.
         /// </summary>
         [Tooltip("Which corner to display ping in.")]
         [SerializeField]
         private Corner _placement = Corner.TopRight;
+        /// <summary>
+        /// True to show the real ping. False to include tick rate latency within the ping.
+        /// </summary>
+        [Tooltip("True to show the real ping. False to include tick rate latency within the ping.")]
+        [SerializeField]
+        private bool _hideTickRate = true;
         #endregion
 
+#if UNITY_EDITOR || !UNITY_SERVER
+
         #region Private.
-        /// <summary>
-        /// Next time TimeManager can be polled. Throttle this to save performance.
-        /// </summary>
-        private float _nextTimeManagerTime;
-        /// <summary>
-        /// TimeManager to get ping from.
-        /// </summary>
-        private TimeManager _timeManager;
         /// <summary>
         /// Style for drawn ping.
         /// </summary>
@@ -44,16 +51,11 @@ namespace FishNet.Component.Utility
 
         private void OnGUI()
         {
-            if (_timeManager == null)
-            {
-                if (Time.unscaledTime < _nextTimeManagerTime)
-                    return;
+            //Only clients can see pings.
+            if (!InstanceFinder.IsClientStarted)
+                return;
 
-                _nextTimeManagerTime = Time.unscaledTime + 1f;
-                _timeManager = InstanceFinder.TimeManager;
-            }
-
-            _style.normal.textColor = Color.white;
+            _style.normal.textColor = _color;
             _style.fontSize = 15;
             float width = 85f;
             float height = 15f;
@@ -82,8 +84,27 @@ namespace FishNet.Component.Utility
                 horizontal = Screen.width - width - edge;
                 vertical = Screen.height - height - edge;
             }
-            GUI.Label(new Rect(horizontal, vertical, width, height), $"Ping: {_timeManager.RoundTripTime}ms", _style);
+
+            long ping;
+            TimeManager tm = InstanceFinder.TimeManager;
+            if (tm == null)
+            {
+                ping = 0;
+            }
+            else
+            {
+                ping = tm.RoundTripTime;
+                long deduction = 0;
+                if (_hideTickRate)
+                    deduction = (long)(tm.TickDelta * 2000d);
+
+                ping = (long)Mathf.Max(1, ping - deduction);
+            }
+
+            GUI.Label(new Rect(horizontal, vertical, width, height), $"Ping: {ping}ms", _style);
         }
+#endif
+
     }
 
 

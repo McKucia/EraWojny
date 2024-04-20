@@ -1,5 +1,6 @@
 using FishNet.Connection;
 using FishNet.Object;
+using FishNet.Transporting;
 using UnityEngine;
 
 public class ServerBroadcaster : NetworkBehaviour
@@ -7,6 +8,7 @@ public class ServerBroadcaster : NetworkBehaviour
 
     public override void OnStartServer()
     {
+        Debug.Log("On start server - broadcaster");
         base.OnStartServer();
 
         ServerManager.RegisterBroadcast<ChatMsg>(OnChatMsg);
@@ -19,7 +21,7 @@ public class ServerBroadcaster : NetworkBehaviour
         ServerManager.UnregisterBroadcast<ChatMsg>(OnChatMsg);
     }
 
-    private void OnChatMsg(NetworkConnection conn, ChatMsg msg)
+    private void OnChatMsg(NetworkConnection conn, ChatMsg msg, Channel channel = Channel.Reliable)
     {
 
         Debug.Log($"Client {conn.ClientId} sent msg: {msg.Text}");

@@ -12,6 +12,10 @@ namespace FishNet.Managing.Scened
     public class SceneLoadData
     {
         /// <summary>
+        /// When specified these scenes will be set as the active scene after loading occurs.
+        /// </summary>
+        public PreferredScene PreferredActiveScene;
+        /// <summary>
         /// SceneLookupData for each scene to load.
         /// </summary>
         public SceneLookupData[] SceneLookupDatas = new SceneLookupData[0];
@@ -142,6 +146,7 @@ namespace FishNet.Managing.Scened
         /// <param name="movedNetworkObjects">NetworkObjects to move to the first specified scene.</param>
         public SceneLoadData(SceneLookupData[] sceneLookupDatas, NetworkObject[] movedNetworkObjects)
         {
+            sceneLookupDatas = SceneLookupData.ValidateData(sceneLookupDatas);
             Construct(sceneLookupDatas, movedNetworkObjects);
         }
 
@@ -155,6 +160,23 @@ namespace FishNet.Managing.Scened
                 movedNetworkObjects = new NetworkObject[0];
             MovedNetworkObjects = movedNetworkObjects;
         }
+
+        /// <summary>
+        /// Gets the first Scene in SceneLookupDatas.
+        /// </summary>
+        /// <returns></returns>
+        public Scene GetFirstLookupScene()
+        {
+            foreach (SceneLookupData sld in SceneLookupDatas)
+            {
+                Scene result = sld.GetScene(out _, false);
+                if (!string.IsNullOrEmpty(result.name))
+                    return result;
+            }
+
+            return default;
+        }
+
 
         /// <summary>
         /// Returns if any data is invalid, such as null entries.

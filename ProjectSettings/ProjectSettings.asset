@@ -350,7 +350,8 @@ PlayerSettings:
   openGLRequireES31: 0
   openGLRequireES31AEP: 0
   openGLRequireES32: 0
-  m_TemplateCustomTags: {}
+  m_TemplateCustomTags:
+    PRODUCT_DESCRIPTION: Era Wojny
   mobileMTRendering:
     Android: 1
     iPhone: 1
@@ -624,7 +625,7 @@ PlayerSettings:
   webGLDebugSymbols: 0
   webGLEmscriptenArgs: 
   webGLModulesDirectory: 
-  webGLTemplate: APPLICATION:Minimal
+  webGLTemplate: APPLICATION:PWA
   webGLAnalyzeBuildSize: 0
   webGLUseEmbeddedResources: 0
   webGLCompressionFormat: 2
@@ -640,8 +641,9 @@ PlayerSettings:
   webGLMemoryGeometricGrowthCap: 96
   webGLPowerPreference: 2
   scriptingDefineSymbols:
-    Standalone: FISHNET
-    WebGL: FISHNET
+    Server: FISHNET;FISHNET_V4;FISHNET_PRO
+    Standalone: FISHNET;FISHNET_V4;FISHNET_PRO
+    WebGL: FISHNET;FISHNET_V4;FISHNET_PRO
   additionalCompilerArguments: {}
   platformArchitecture: {}
   scriptingBackend: {}
@@ -747,7 +749,7 @@ PlayerSettings:
   hmiLogStartupTiming: 0
   hmiCpuConfiguration: 
   apiCompatibilityLevel: 6
-  activeInputHandler: 0
+  activeInputHandler: 2
   windowsGamepadBackendHint: 0
   cloudProjectId: 
   framebufferDepthMemorylessMode: 0

@@ -1,22 +1,39 @@
+using FishNet.CodeGenerating;
+using FishNet.Component.Animating;
 using FishNet.Object;
-using System;
+using FishNet.Object.Synchronizing;
+using System.Linq;
 using Unity.VisualScripting;
 using UnityEngine;
 
 public class Unit : NetworkBehaviour
 {
-    [SerializeField] protected float moveSpeed;
-    [SerializeField] protected float spawnYPosition;
-    [SerializeField] protected float attackDistance;
-    [SerializeField] protected float strength;
-    [SerializeField] string enemyTag;
-    [SerializeField] Animator animator;
-    [SerializeField] bool inverted = false;
-    [SerializeField] int numAttacks = 4;
+    public Camera PlayerCamera;
 
-    bool isMoving = true;
-    bool isAttacking = false;
+    [SerializeField] float moveSpeed;
+    [SerializeField] float spawnYPosition;
+    [SerializeField] float attackDistance;
+    [SerializeField] string enemyTag;
+    [SerializeField] int strength;
+    [SerializeField] int numAttacks = 4;
+    [SerializeField] Animator animator;
+    [SerializeField] NetworkAnimator networkAnimator;
+    [SerializeField] HealthBar healthBar;
+
+    readonly SyncVar<bool> isMoving = new SyncVar<bool>(true);
+    readonly SyncVar<bool> isAttacking = new SyncVar<bool>(false);
+    readonly SyncVar<Unit> currentEnemyUnit = new SyncVar<Unit>();
+
+    // [AllowMutableSyncType]
+    // [SerializeField]
+    // public SyncVar<int> hp = new SyncVar<int>(10);
+
+    bool inverted = false;
+    //bool isAttacking = false;
+    bool initialized = false;
     int prevAttackType = 0;
+    [SerializeField]
+    int hp = 15;
 
     public override void OnStartClient()
     {
@@ -30,62 +47,123 @@ public class Unit : NetworkBehaviour
 
     void Update()
     {
-        if (isMoving) Move();
-        CheckEnemyDistance();
+        if (IsServerInitialized)
+        {
+            CheckCollideDistanceServer(transform.position, transform.forward);
+            MoveServer();
+        }
+
+        if (!base.IsOwner) return;
     }
 
-    [Client(RequireOwnership = true)]
+
     void Init()
     {
+        isMoving.OnChange += OnIsMoving;
+        isAttacking.OnChange += OnIsAttacking;
+
         float angle = transform.eulerAngles.y > 180 ? transform.eulerAngles.y - 360 : transform.eulerAngles.y;
         inverted = angle < 0;
+        animator.SetBool("IsWalking", true);
 
         Cursor.lockState = CursorLockMode.Confined;
+
+        healthBar.Init(PlayerCamera, inverted, hp);
+
+        initialized = true;
     }
 
-    void Move()
+    void MoveServer()
     {
-        transform.position += new Vector3((inverted ? -1 : 1) * moveSpeed * Time.smoothDeltaTime, 0, 0);
+        if (isMoving.Value)
+            transform.position += new Vector3(inverted ? -1 : 1, 0f, 0f) * moveSpeed / 20f;
     }
 
-    void CheckEnemyDistance()
+    void CheckCollideDistanceServer(Vector3 position, Vector3 direction)
     {
-        if (Physics.Raycast(transform.position, transform.TransformDirection(Vector3.forward), out RaycastHit hit, attackDistance))
+        if (isAttacking.Value) return;
+
+        RaycastHit hit;
+        if (gameObject.scene.GetPhysicsScene().Raycast(position, direction, out hit, attackDistance))
         {
-            if (hit.collider.CompareTag(enemyTag))
+            var hittedObject = hit.collider.gameObject;
+            if (!hittedObject.CompareTag(enemyTag) || hittedObject == this.gameObject) return;
+
+            var unit = hittedObject.GetComponent<Unit>();
+            if (!unit) return;
+
+            if (unit.inverted == this.inverted)
             {
-                if (isAttacking) return;
-                isAttacking = true;
-                isMoving = false;
-                Attack();
-                animator.SetBool("IsWalking", false);
+                isMoving.Value = false;
+            }
+            else
+            {
+                isMoving.Value = false;
+                isAttacking.Value = true;
+                currentEnemyUnit.Value = unit;
             }
         }
         else
         {
-            isAttacking = false;
-            isMoving = true;
-            animator.SetBool("IsWalking", true);
+            isMoving.Value = true;
         }
     }
 
-    // animation event
-    public void Attack()
+    void OnIsMoving(bool prev, bool next, bool asServer)
     {
-        if (!isAttacking)
+        if(next == false)
+            animator.SetBool("IsWalking", false);
+        else
+            animator.SetBool("IsWalking", true);
+    }
+
+    void OnIsAttacking(bool prev, bool next, bool asServer)
+    {
+        if (next == true)
+            Attack();
+    }
+
+    public void TakeDamage(int damage)
+    {
+        hp -= damage;
+        if (hp <= 0)
         {
-            animator.SetBool("IsAttacking", false);
+            Despawn(gameObject);
             return;
         }
+
+        healthBar.UpdateHP(hp);
+    }
+
+    #region Animation Events
+
+    public void Attack()
+    {
+        if (!isAttacking.Value)
+            return;
 
         int attackType = prevAttackType;
 
         while (attackType == prevAttackType)
-            attackType = UnityEngine.Random.Range(0, numAttacks);
+            attackType = Random.Range(0, numAttacks);
 
         prevAttackType = attackType;
 
         animator.SetInteger("AttackType", attackType);
-        animator.SetTrigger("Attack");
+        networkAnimator.SetTrigger("Attack");
     }
+
+    public void Hit()
+    {
+        if (!base.IsServerInitialized) return;
+
+        if (currentEnemyUnit.Value.hp - strength <= 0)
+        {
+            isMoving.Value = true;
+            isAttacking.Value = false;
+        }
+        currentEnemyUnit.Value.TakeDamage(strength);
+    }
+
+    #endregion
 }

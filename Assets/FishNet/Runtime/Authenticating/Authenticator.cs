@@ -10,14 +10,20 @@ namespace FishNet.Authenticating
     /// </summary>
     public abstract class Authenticator : MonoBehaviour
     {
+        #region Public.
+        /// <summary>
+        /// True if this authenticator has been intiialzied.
+        /// </summary>
+        public bool Initialized { get; private set; }
+        #endregion
+
         #region Protected.
         /// <summary>
         /// NetworkManager for this Authenticator.
         /// </summary>
         protected NetworkManager NetworkManager { get; private set; }
         #endregion
-
-
+         
         /// <summary>
         /// Called when authenticator has concluded a result for a connection. Boolean is true if authentication passed, false if failed.
         /// Server listens for this event automatically.
@@ -31,6 +37,7 @@ namespace FishNet.Authenticating
         public virtual void InitializeOnce(NetworkManager networkManager)
         {
             NetworkManager = networkManager;
+            Initialized = true;
         }
 
         /// <summary>

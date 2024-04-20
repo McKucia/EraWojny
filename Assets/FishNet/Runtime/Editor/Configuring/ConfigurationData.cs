@@ -1,14 +1,49 @@
-﻿
+﻿#if UNITY_EDITOR
+using FishNet.Editing.PrefabCollectionGenerator;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Xml.Serialization;
-
-#if UNITY_EDITOR
 using UnityEditor;
-#endif
+
 
 namespace FishNet.Configuring
 {
+
+    public enum StrippingTypes : int
+    {
+        Redirect = 0,
+        Empty_Experimental = 1,
+    }
+    public enum SearchScopeType : int
+    {
+        EntireProject = 0,
+        SpecificFolders = 1,
+    }
+
+    public class PrefabGeneratorConfigurations
+    {
+        public bool Enabled = true;
+        public bool LogToConsole = true;
+        public bool FullRebuild = false;
+        public bool SpawnableOnly = true;
+        public bool SaveChanges = true;
+        public string DefaultPrefabObjectsPath = Path.Combine("Assets", "DefaultPrefabObjects.asset");
+        internal string DefaultPrefabObjectsPath_Platform => Generator.GetPlatformPath(DefaultPrefabObjectsPath);
+        public int SearchScope = (int)SearchScopeType.EntireProject;
+        public List<string> ExcludedFolders = new List<string>();
+        public List<string> IncludedFolders = new List<string>();
+    }
+
+    public class CodeStrippingConfigurations
+    {
+        public bool IsBuilding = false;
+        public bool IsDevelopment = false;
+        public bool IsHeadless = false;
+        public bool StripReleaseBuilds = false;
+        public int StrippingType = (int)StrippingTypes.Redirect;
+    }
+
 
     public class ConfigurationData
     {
@@ -16,32 +51,25 @@ namespace FishNet.Configuring
         [System.NonSerialized]
         public bool Loaded;
 
-        public bool IsBuilding;
-        public bool IsDevelopment;
-        public bool IsHeadless;
-
-        public bool StripReleaseBuilds = false;
-
-        public const string VERSION = "2.2.4"; //this will need to read from the text file going forward.
-        public string SavedVersion;
+        public PrefabGeneratorConfigurations PrefabGenerator = new PrefabGeneratorConfigurations();
+        public CodeStrippingConfigurations CodeStripping = new CodeStrippingConfigurations();
     }
 
     public static class ConfigurationDataExtension
     {
-
         /// <summary>
         /// Returns if a differs from b.
         /// </summary>
         public static bool HasChanged(this ConfigurationData a, ConfigurationData b)
         {
-            return (a.StripReleaseBuilds != b.StripReleaseBuilds);
+            return (a.CodeStripping.StripReleaseBuilds != b.CodeStripping.StripReleaseBuilds);
         }
         /// <summary>
         /// Copies all values from source to target.
         /// </summary>
         public static void CopyTo(this ConfigurationData source, ConfigurationData target)
         {
-            target.StripReleaseBuilds = source.StripReleaseBuilds;
+            target.CodeStripping.StripReleaseBuilds = source.CodeStripping.StripReleaseBuilds;
         }
 
 
@@ -117,3 +145,4 @@ namespace FishNet.Configuring
 
 
 }
+#endif

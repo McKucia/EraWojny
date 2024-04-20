@@ -9,4 +9,9 @@ public class EnemyAnimationEvents : MonoBehaviour
     {
         unit.Attack();
     }
+
+    public void TakeDamage()
+    {
+        unit.Hit();
+    }
 }

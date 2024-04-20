@@ -7,24 +7,24 @@ using UnityEngine;
 namespace FishNet.CodeGenerating.Helping.Extension
 {
 
-    internal static class TypeReferenceExtensions
+    internal static class TypeReferenceExtensionsOld
     {
 
         /// <summary>
         /// Gets a Resolve favoring cached results first.
         /// </summary>
-        internal static TypeDefinition CachedResolve(this TypeReference typeRef)
+        internal static TypeDefinition CachedResolve(this TypeReference typeRef, CodegenSession session)
         {
-            return CodegenSession.GeneralHelper.GetTypeReferenceResolve(typeRef);
+            return session.GetClass<GeneralHelper>().GetTypeReferenceResolve(typeRef);
         }
 
         /// <summary>
         /// Returns if typeRef is a class or struct.
         /// </summary>
-        internal static bool IsClassOrStruct(this TypeReference typeRef)
+        internal static bool IsClassOrStruct(this TypeReference typeRef, CodegenSession session)
         {
-            TypeDefinition typeDef = typeRef.CachedResolve();
-            return (!typeDef.IsPrimitive && (typeDef.IsClass || typeDef.IsValueType));
+            TypeDefinition typeDef = typeRef.CachedResolve(session);
+            return (!typeDef.IsPrimitive && !typeDef.IsEnum && (typeDef.IsClass || typeDef.IsValueType));
         }
 
         /// <summary>
@@ -32,9 +32,9 @@ namespace FishNet.CodeGenerating.Helping.Extension
         /// </summary>
         /// <param name="typeRef"></param>
         /// <returns></returns>
-        public static IEnumerable<PropertyDefinition> FindAllPublicProperties(this TypeReference typeRef, bool excludeGenerics = true, System.Type[] excludedBaseTypes = null, string[] excludedAssemblyPrefixes = null)
+        public static IEnumerable<PropertyDefinition> FindAllSerializableProperties(this TypeReference typeRef, CodegenSession session, System.Type[] excludedBaseTypes = null, string[] excludedAssemblyPrefixes = null)
         {
-            return typeRef.CachedResolve().FindAllPublicProperties(excludeGenerics, excludedBaseTypes, excludedAssemblyPrefixes);
+            return typeRef.CachedResolve(session).FindAllPublicProperties(session, excludedBaseTypes, excludedAssemblyPrefixes);
         }
 
 
@@ -43,42 +43,12 @@ namespace FishNet.CodeGenerating.Helping.Extension
         /// </summary>
         /// <param name="typeRef"></param>
         /// <returns></returns>
-        public static IEnumerable<FieldDefinition> FindAllPublicFields(this TypeReference typeRef, bool ignoreStatic, bool ignoreNonSerialized, System.Type[] excludedBaseTypes = null, string[] excludedAssemblyPrefixes = null)
+        public static IEnumerable<FieldDefinition> FindAllSerializableFields(this TypeReference typeRef, CodegenSession session, 
+            System.Type[] excludedBaseTypes = null, string[] excludedAssemblyPrefixes = null)
         {
-            return typeRef.Resolve().FindAllPublicFields(ignoreStatic, ignoreNonSerialized, excludedBaseTypes, excludedAssemblyPrefixes);
+            return typeRef.Resolve().FindAllPublicFields(session, excludedBaseTypes, excludedAssemblyPrefixes);
         }
 
-        /// <summary>
-        /// Returns a method within the base type of typeRef.
-        /// </summary>
-        /// <param name="typeRef"></param>
-        /// <param name="methodName"></param>
-        /// <returns></returns>
-        public static MethodDefinition GetMethodInBase(this TypeReference typeRef, string methodName)
-        {
-            TypeDefinition td = typeRef.CachedResolve().GetNextBaseClass();
-            while (td != null)
-            {
-                foreach (MethodDefinition md in td.Methods)
-                {
-                    if (md.Name == methodName)
-                        return md;
-                }
-
-                try
-                {
-                    td = td.GetNextBaseClass();
-                }
-                /* This may occur when inheriting from a class
-                 * in another assembly. */
-                catch (AssemblyResolutionException)
-                {
-                    break;
-                }
-            }
-
-            return null;
-        }
 
         /// <summary>
         /// Returns if a typeRef is type.
@@ -112,7 +82,7 @@ namespace FishNet.CodeGenerating.Helping.Extension
         /// </summary>
         /// <param name="typeRef"></param>
         /// <returns></returns>
-        public static bool CanBeResolved(this TypeReference typeRef)
+        public static bool CanBeResolved(this TypeReference typeRef, CodegenSession session)
         {
             while (typeRef != null)
             {
@@ -123,13 +93,13 @@ namespace FishNet.CodeGenerating.Helping.Extension
 
                 if (typeRef.Scope.Name == "mscorlib")
                 {
-                    TypeDefinition resolved = typeRef.CachedResolve();
+                    TypeDefinition resolved = typeRef.CachedResolve(session);
                     return resolved != null;
                 }
 
                 try
                 {
-                    typeRef = typeRef.CachedResolve().BaseType;
+                    typeRef = typeRef.CachedResolve(session).BaseType;
                 }
                 catch
                 {
@@ -149,7 +119,7 @@ namespace FishNet.CodeGenerating.Helping.Extension
             if (type.HasGenericParameters)
             {
                 // get all the generic parameters and make a generic instance out of it
-                var genericTypes = new TypeReference[type.GenericParameters.Count];
+                TypeReference[] genericTypes = new TypeReference[type.GenericParameters.Count];
                 for (int i = 0; i < type.GenericParameters.Count; i++)
                 {
                     genericTypes[i] = type.GenericParameters[i].GetElementType();

@@ -1,11 +1,15 @@
 ﻿using FishNet.Broadcast;
+using FishNet.CodeGenerating.Extension;
 using FishNet.CodeGenerating.Helping;
 using FishNet.CodeGenerating.Helping.Extension;
 using FishNet.CodeGenerating.Processing;
+using FishNet.CodeGenerating.Processing.Rpc;
 using FishNet.Configuring;
+using FishNet.Editing.Upgrading;
 using FishNet.Serializing.Helping;
 using MonoFN.Cecil;
 using MonoFN.Cecil.Cil;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -18,11 +22,6 @@ namespace FishNet.CodeGenerating.ILCore
     {
         #region Const.
         internal const string RUNTIME_ASSEMBLY_NAME = "FishNet.Runtime";
-        /// <summary>
-        /// If not empty codegen will only include types within this Namespace while iterating RUNTIME_ASSEMBLY_NAME>
-        /// </summary>
-        //internal const string CODEGEN_THIS_NAMESPACE = "FishNet.Managing.Scened";
-        internal const string CODEGEN_THIS_NAMESPACE = "";
         #endregion
 
         public override bool WillProcess(ICompiledAssembly compiledAssembly)
@@ -41,89 +40,85 @@ namespace FishNet.CodeGenerating.ILCore
              * intentionally to stop codegen from running on the runtime
              * fishnet assembly, but the option below is for debugging. I would
              * comment out this check if I wanted to compile fishnet runtime. */
-            if (CODEGEN_THIS_NAMESPACE.Length == 0)
-            {
-                if (compiledAssembly.Name == RUNTIME_ASSEMBLY_NAME)
-                    return false;
-            }
+            //if (CODEGEN_THIS_NAMESPACE.Length == 0)
+            //{
+            //    if (compiledAssembly.Name == RUNTIME_ASSEMBLY_NAME)
+            //        return false;
+            //}
             bool referencesFishNet = FishNetILPP.IsFishNetAssembly(compiledAssembly) || compiledAssembly.References.Any(filePath => Path.GetFileNameWithoutExtension(filePath) == RUNTIME_ASSEMBLY_NAME);
             return referencesFishNet;
         }
         public override ILPostProcessor GetInstance() => this;
-
         public override ILPostProcessResult Process(ICompiledAssembly compiledAssembly)
         {
             AssemblyDefinition assemblyDef = ILCoreHelper.GetAssemblyDefinition(compiledAssembly);
             if (assemblyDef == null)
                 return null;
+
             //Check WillProcess again; somehow certain editor scripts skip the WillProcess check.
             if (!WillProcess(compiledAssembly))
                 return null;
-            //Resets instances of helpers and populates data needed by all helpers.
-            if (!CodegenSession.Reset(assemblyDef.MainModule))
+
+            CodegenSession session = new CodegenSession();
+            if (!session.Initialize(assemblyDef.MainModule))
                 return null;
 
             bool modified = false;
 
-            if (IsFishNetAssembly(compiledAssembly))
+            bool fnAssembly = IsFishNetAssembly(compiledAssembly);
+            if (fnAssembly)
+                modified |= ModifyMakePublicMethods(session);
+            /* If one or more scripts use RPCs but don't inherit NetworkBehaviours
+             * then don't bother processing the rest. */
+            if (session.GetClass<NetworkBehaviourProcessor>().NonNetworkBehaviourHasInvalidAttributes(session.Module.Types))
+                return new ILPostProcessResult(null, session.Diagnostics);
+
+            modified |= session.GetClass<WriterProcessor>().Process();
+            modified |= session.GetClass<ReaderProcessor>().Process();
+            modified |= CreateDeclaredSerializerDelegates(session);
+            modified |= CreateDeclaredSerializers(session);
+            modified |= CreateDeclaredComparerDelegates(session);
+            modified |= CreateIBroadcast(session);
+#if !DISABLE_QOL_ATTRIBUTES
+            modified |= CreateQOLAttributes(session);
+#endif
+            modified |= CreateNetworkBehaviours(session);
+            modified |= CreateSerializerInitializeDelegates(session);
+
+            if (fnAssembly)
             {
-                //Not used...
-                modified |= ModifyMakePublicMethods();
-            }
-            else
-            {
-                /* If one or more scripts use RPCs but don't inherit NetworkBehaviours
-                 * then don't bother processing the rest. */
-                if (CodegenSession.NetworkBehaviourProcessor.NonNetworkBehaviourHasInvalidAttributes(CodegenSession.Module.Types))
-                    return new ILPostProcessResult(null, CodegenSession.Diagnostics);
-                //before 226ms, after 17ms                   
-                modified |= CreateDeclaredDelegates();
-                //before 5ms, after 5ms
-                modified |= CreateDeclaredSerializers();
-                //before 30ms, after 26ms
-                modified |= CreateIBroadcast();
-                //before 140ms, after 10ms
-                modified |= CreateQOLAttributes();
-                //before 75ms, after 6ms
-                modified |= CreateNetworkBehaviours();
-                //before 260ms, after 215ms 
-                modified |= CreateGenericReadWriteDelegates();
-                //before 52ms, after 27ms
-
-                //Total at once
-                //before 761, after 236ms
-
-                /* If there are warnings about SyncVars being in different assemblies.
-                 * This is awful ... codegen would need to be reworked to save
-                 * syncvars across all assemblies so that scripts referencing them from
-                 * another assembly can have it's instructions changed. This however is an immense
-                 * amount of work so it will have to be put on hold, for... a long.. long while. */
-                if (CodegenSession.DifferentAssemblySyncVars.Count > 0)
-                {
-                    StringBuilder sb = new StringBuilder();
-                    sb.AppendLine($"Assembly {CodegenSession.Module.Name} has inherited access to SyncVars in different assemblies. When accessing SyncVars across assemblies be sure to use Get/Set methods withinin the inherited assembly script to change SyncVars. Accessible fields are:");
-
-                    //foreach ((TypeDefinition td, FieldDefinition fd) item in CodegenSession.DifferentAssemblySyncVars)
-                    //{ 
-                    // //   sb.AppendLine($"Field {item.fd.Name} within {item.fd.DeclaringType.FullName} in assembly {item.fd.Module.Name} is accessible.");
-                    //}
-                    foreach (FieldDefinition item in CodegenSession.DifferentAssemblySyncVars)
-                        sb.AppendLine($"   - Field {item.Name} within {item.DeclaringType.FullName} in assembly {item.Module.Name}.");
-
-                    CodegenSession.LogWarning("v------- IMPORTANT -------v");
-                    CodegenSession.LogWarning(sb.ToString());
-                    CodegenSession.DifferentAssemblySyncVars.Clear();
-                }
+                AssemblyNameReference anr = session.Module.AssemblyReferences.FirstOrDefault<AssemblyNameReference>(x => x.FullName == session.Module.Assembly.FullName);
+                if (anr != null)
+                    session.Module.AssemblyReferences.Remove(anr);
             }
 
-            //CodegenSession.LogWarning($"Assembly {compiledAssembly.Name} took {stopwatch.ElapsedMilliseconds}.");
+            /* If there are warnings about SyncVars being in different assemblies.
+             * This is awful ... codegen would need to be reworked to save
+             * syncvars across all assemblies so that scripts referencing them from
+             * another assembly can have it's instructions changed. This however is an immense
+             * amount of work so it will have to be put on hold, for... a long.. long while. */
+            if (session.DifferentAssemblySyncVars.Count > 0)
+            {
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine($"Assembly {session.Module.Name} has inherited access to SyncVars in different assemblies. When accessing SyncVars across assemblies be sure to use Get/Set methods withinin the inherited assembly script to change SyncVars. Accessible fields are:");
 
+                foreach (FieldDefinition item in session.DifferentAssemblySyncVars)
+                    sb.AppendLine($"Field {item.Name} within {item.DeclaringType.FullName} in assembly {item.Module.Name}.");
+
+                session.LogWarning("v------- IMPORTANT -------v");
+                session.LogWarning(sb.ToString());
+                session.DifferentAssemblySyncVars.Clear();
+            }
+
+            //session.LogWarning($"Assembly {compiledAssembly.Name} took {stopwatch.ElapsedMilliseconds}.");
             if (!modified)
             {
                 return null;
             }
             else
             {
+                TryLogV3ToV4Helpers(session);
+
                 MemoryStream pe = new MemoryStream();
                 MemoryStream pdb = new MemoryStream();
                 WriterParameters writerParameters = new WriterParameters
@@ -133,18 +128,37 @@ namespace FishNet.CodeGenerating.ILCore
                     WriteSymbols = true
                 };
                 assemblyDef.Write(pe, writerParameters);
-                return new ILPostProcessResult(new InMemoryAssembly(pe.ToArray(), pdb.ToArray()), CodegenSession.Diagnostics);
+                return new ILPostProcessResult(new InMemoryAssembly(pe.ToArray(), pdb.ToArray()), session.Diagnostics);
             }
         }
+
+        /// <summary>
+        /// Logs warning if v3 to v4 helpers are enabled.
+        /// </summary>
+        private void TryLogV3ToV4Helpers(CodegenSession session)
+        {
+#if !FISHNET_DISABLE_V3TOV4_HELPERS
+            /* There is no way to check if this has run already once per codegen
+             * so the only option is to print per session, which means
+             * a print will occur every time an assembly compiles. This means
+             * several prints will potentially occur per script change.
+             * 
+             * However, these warnings typically only print when all errors are gone.
+             * When this is true the user may go ahead and disable this warning
+             * as instructed. */
+            session.LogWarning(UpgradeFromV3ToV4Menu.EnabledWarning);
+#endif
+        }
+
 
         /// <summary>
         /// Makees methods public scope which use CodegenMakePublic attribute.
         /// </summary>
         /// <returns></returns>
-        private bool ModifyMakePublicMethods()
+        private bool ModifyMakePublicMethods(CodegenSession session)
         {
-            string makePublicTypeFullName = typeof(CodegenMakePublicAttribute).FullName;
-            foreach (TypeDefinition td in CodegenSession.Module.Types)
+            string makePublicTypeFullName = typeof(MakePublicAttribute).FullName;
+            foreach (TypeDefinition td in session.Module.Types)
             {
                 foreach (MethodDefinition md in td.Methods)
                 {
@@ -165,19 +179,18 @@ namespace FishNet.CodeGenerating.ILCore
         /// <summary>
         /// Creates delegates for user declared serializers.
         /// </summary>
-        public bool CreateDeclaredDelegates()
+        internal bool CreateDeclaredSerializerDelegates(CodegenSession session)
         {
             bool modified = false;
 
-            TypeAttributes readWriteExtensionTypeAttr = (TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Abstract);
-            List<TypeDefinition> allTypeDefs = CodegenSession.Module.Types.ToList();
+            List<TypeDefinition> allTypeDefs = session.Module.Types.ToList();
             foreach (TypeDefinition td in allTypeDefs)
             {
-                if (CodegenSession.GeneralHelper.IgnoreTypeDefinition(td))
+                if (session.GetClass<GeneralHelper>().HasExcludeSerializationAttribute(td))
                     continue;
 
-                if (td.Attributes.HasFlag(readWriteExtensionTypeAttr))
-                    modified |= CodegenSession.CustomSerializerProcessor.CreateDelegates(td);
+                if (td.Attributes.HasFlag(WriterProcessor.CUSTOM_SERIALIZER_TYPEDEF_ATTRIBUTES))
+                    modified |= session.GetClass<CustomSerializerProcessor>().CreateSerializerDelegates(td, true);
             }
 
             return modified;
@@ -186,39 +199,54 @@ namespace FishNet.CodeGenerating.ILCore
         /// <summary>
         /// Creates serializers for custom types within user declared serializers.
         /// </summary>
-        /// <param name="moduleDef"></param>
-        /// <param name="diagnostics"></param>
-        private bool CreateDeclaredSerializers()
+        private bool CreateDeclaredSerializers(CodegenSession session)
         {
             bool modified = false;
 
-            TypeAttributes readWriteExtensionTypeAttr = (TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Abstract);
-            List<TypeDefinition> allTypeDefs = CodegenSession.Module.Types.ToList();
+            List<TypeDefinition> allTypeDefs = session.Module.Types.ToList();
             foreach (TypeDefinition td in allTypeDefs)
             {
-                if (CodegenSession.GeneralHelper.IgnoreTypeDefinition(td))
+                if (session.GetClass<GeneralHelper>().HasExcludeSerializationAttribute(td))
                     continue;
 
-                if (td.Attributes.HasFlag(readWriteExtensionTypeAttr))
-                    modified |= CodegenSession.CustomSerializerProcessor.CreateSerializers(td);
+                if (td.Attributes.HasFlag(WriterProcessor.CUSTOM_SERIALIZER_TYPEDEF_ATTRIBUTES))
+                    modified |= session.GetClass<CustomSerializerProcessor>().CreateSerializers(td);
             }
 
             return modified;
         }
 
         /// <summary>
+        /// Creates delegates for user declared comparers.
+        /// </summary>
+        internal bool CreateDeclaredComparerDelegates(CodegenSession session)
+        {
+            bool modified = false;
+            List<TypeDefinition> allTypeDefs = session.Module.Types.ToList();
+            foreach (TypeDefinition td in allTypeDefs)
+            {
+                if (session.GetClass<GeneralHelper>().HasExcludeSerializationAttribute(td))
+                    continue;
+
+                modified |= session.GetClass<CustomSerializerProcessor>().CreateComparerDelegates(td);
+            }
+
+            return modified;
+        }
+
+
+        /// <summary>
         /// Creaters serializers and calls for IBroadcast.
         /// </summary>
         /// <param name="moduleDef"></param>
         /// <param name="diagnostics"></param>
-        private bool CreateIBroadcast()
+        private bool CreateIBroadcast(CodegenSession session)
         {
             bool modified = false;
 
-            string networkBehaviourFullName = CodegenSession.ObjectHelper.NetworkBehaviour_FullName;
-
+            string networkBehaviourFullName = session.GetClass<NetworkBehaviourHelper>().FullName;
             HashSet<TypeDefinition> typeDefs = new HashSet<TypeDefinition>();
-            foreach (TypeDefinition td in CodegenSession.Module.Types)
+            foreach (TypeDefinition td in session.Module.Types)
             {
                 TypeDefinition climbTd = td;
                 do
@@ -241,7 +269,7 @@ namespace FishNet.CodeGenerating.ILCore
                     }
                     //0ms
 
-                    climbTd = climbTd.GetNextBaseClass();
+                    climbTd = climbTd.GetNextBaseTypeDefinition(session);
                     //this + name check 40ms
                 } while (climbTd != null);
 
@@ -251,11 +279,10 @@ namespace FishNet.CodeGenerating.ILCore
             //Create reader/writers for found typeDefs.
             foreach (TypeDefinition td in typeDefs)
             {
-                TypeReference typeRef = CodegenSession.ImportReference(td);
-
-                bool canSerialize = CodegenSession.GeneralHelper.HasSerializerAndDeserializer(typeRef, true);
+                TypeReference typeRef = session.ImportReference(td);
+                bool canSerialize = session.GetClass<GeneralHelper>().HasSerializerAndDeserializer(typeRef, true);
                 if (!canSerialize)
-                    CodegenSession.LogError($"Broadcast {td.Name} does not support serialization. Use a supported type or create a custom serializer.");
+                    session.LogError($"Broadcast {td.Name} does not support serialization. Use a supported type or create a custom serializer.");
                 else
                     modified = true;
             }
@@ -267,26 +294,40 @@ namespace FishNet.CodeGenerating.ILCore
         /// Handles QOLAttributes such as [Server].
         /// </summary>
         /// <returns></returns>
-        private bool CreateQOLAttributes()
+        private bool CreateQOLAttributes(CodegenSession session)
         {
             bool modified = false;
 
             bool codeStripping = false;
-            
-            List<TypeDefinition> allTypeDefs = CodegenSession.Module.Types.ToList();
+            //PROSTART
+            codeStripping = CodeStripping.StripBuild;
+            //PROEND
+            List<TypeDefinition> allTypeDefs = session.Module.Types.ToList();
 
             /* First pass, potentially only pass.
              * If code stripping them this will be run again. The first iteration
              * is to ensure things are removed in the proper order. */
             foreach (TypeDefinition td in allTypeDefs)
             {
-                if (CodegenSession.GeneralHelper.IgnoreTypeDefinition(td))
+                if (session.GetClass<GeneralHelper>().HasExcludeSerializationAttribute(td))
                     continue;
 
-                modified |= CodegenSession.QolAttributeProcessor.Process(td, codeStripping);
+                modified |= session.GetClass<QolAttributeProcessor>().Process(td, codeStripping);
             }
 
-            
+            //PROSTART
+            /* If stripping then remove the remainder content */
+            if (codeStripping)
+            {
+                foreach (TypeDefinition td in allTypeDefs)
+                {
+                    if (session.GetClass<GeneralHelper>().HasExcludeSerializationAttribute(td))
+                        continue;
+
+                    modified |= session.GetClass<QolAttributeProcessor>().Process(td, false);
+                }
+            }
+            //PROEND
 
             return modified;
         }
@@ -294,59 +335,27 @@ namespace FishNet.CodeGenerating.ILCore
         /// <summary>
         /// Creates NetworkBehaviour changes.
         /// </summary>
-        /// <param name="moduleDef"></param>
-        /// <param name="diagnostics"></param>
-        private bool CreateNetworkBehaviours()
+        private bool CreateNetworkBehaviours(CodegenSession session)
         {
-            bool modified = false;
             //Get all network behaviours to process.
-            List<TypeDefinition> networkBehaviourTypeDefs = CodegenSession.Module.Types
-                .Where(td => td.IsSubclassOf(CodegenSession.ObjectHelper.NetworkBehaviour_FullName))
+            List<TypeDefinition> networkBehaviourTypeDefs = session.Module.Types
+                .Where(td => td.IsSubclassOf(session, session.GetClass<NetworkBehaviourHelper>().FullName))
                 .ToList();
 
-            //Moment a NetworkBehaviour exist the assembly is considered modified.
-            if (networkBehaviourTypeDefs.Count > 0)
-                modified = true;
-
             /* Remove types which are inherited. This gets the child most networkbehaviours.
-             * Since processing iterates all parent classes there's no reason to include them */
+             * Since processing iterates upward from each child there is no reason
+             * to include any inherited NBs. */
             RemoveInheritedTypeDefinitions(networkBehaviourTypeDefs);
-            //Set how many rpcs are in children classes for each typedef.
-            Dictionary<TypeDefinition, uint> inheritedRpcCounts = new Dictionary<TypeDefinition, uint>();
-            SetChildRpcCounts(inheritedRpcCounts, networkBehaviourTypeDefs);
-            //Set how many synctypes are in children classes for each typedef.
-            Dictionary<TypeDefinition, uint> inheritedSyncTypeCounts = new Dictionary<TypeDefinition, uint>();
-            SetChildSyncTypeCounts(inheritedSyncTypeCounts, networkBehaviourTypeDefs);
-
-            /* This holds all sync types created, synclist, dictionary, var
-             * and so on. This data is used after all syncvars are made so
-             * other methods can look for references to created synctypes and
-             * replace accessors accordingly. */
-            List<(SyncType, ProcessedSync)> allProcessedSyncs = new List<(SyncType, ProcessedSync)>();
-            HashSet<string> allProcessedCallbacks = new HashSet<string>();
-            List<TypeDefinition> processedClasses = new List<TypeDefinition>();
 
             foreach (TypeDefinition typeDef in networkBehaviourTypeDefs)
             {
-                CodegenSession.ImportReference(typeDef);
-                //Synctypes processed for this nb and it's inherited classes.
-                List<(SyncType, ProcessedSync)> processedSyncs = new List<(SyncType, ProcessedSync)>();
-                CodegenSession.NetworkBehaviourProcessor.Process(typeDef, processedSyncs,
-                    inheritedSyncTypeCounts, inheritedRpcCounts);
-                //Add to all processed.
-                allProcessedSyncs.AddRange(processedSyncs);
+                session.ImportReference(typeDef);
+                session.GetClass<NetworkBehaviourProcessor>().ProcessLocal(typeDef);
             }
 
-            /* Must run through all scripts should user change syncvar
-             * from outside the networkbehaviour. */
-            if (allProcessedSyncs.Count > 0)
-            {
-                foreach (TypeDefinition td in CodegenSession.Module.Types)
-                {
-                    CodegenSession.NetworkBehaviourSyncProcessor.ReplaceGetSets(td, allProcessedSyncs);
-                    CodegenSession.RpcProcessor.RedirectBaseCalls();
-                }
-            }
+            //Call base methods on RPCs.
+            foreach (TypeDefinition td in session.Module.Types)
+                session.GetClass<RpcProcessor>().RedirectBaseCalls();
 
             /* Removes typedefinitions which are inherited by
              * another within tds. For example, if the collection
@@ -357,22 +366,21 @@ namespace FishNet.CodeGenerating.ILCore
             {
                 HashSet<TypeDefinition> inheritedTds = new HashSet<TypeDefinition>();
                 /* Remove any networkbehaviour typedefs which are inherited by
-                 * another networkbehaviour typedef. When a networkbehaviour typedef
-                 * is processed so are all of the inherited types. */
+                 * another networkbehaviour typedef. */
                 for (int i = 0; i < tds.Count; i++)
                 {
                     /* Iterates all base types and
                      * adds them to inheritedTds so long
                      * as the base type is not a NetworkBehaviour. */
-                    TypeDefinition copyTd = tds[i].GetNextBaseClass();
+                    TypeDefinition copyTd = tds[i].GetNextBaseTypeDefinition(session);
                     while (copyTd != null)
                     {
                         //Class is NB.
-                        if (copyTd.FullName == CodegenSession.ObjectHelper.NetworkBehaviour_FullName)
+                        if (copyTd.FullName == session.GetClass<NetworkBehaviourHelper>().FullName)
                             break;
 
                         inheritedTds.Add(copyTd);
-                        copyTd = copyTd.GetNextBaseClass();
+                        copyTd = copyTd.GetNextBaseTypeDefinition(session);
                     }
                 }
 
@@ -381,90 +389,8 @@ namespace FishNet.CodeGenerating.ILCore
                     tds.Remove(item);
             }
 
-            /* Sets how many Rpcs are within the children
-             * of each typedefinition. EG: if our structure is
-             * A : B : C, with the following RPC counts...
-             * A 3
-             * B 1
-             * C 2
-             * then B child rpc counts will be 3, and C will be 4. */
-            void SetChildRpcCounts(Dictionary<TypeDefinition, uint> typeDefCounts, List<TypeDefinition> tds)
-            {
-                foreach (TypeDefinition typeDef in tds)
-                {
-                    //Number of RPCs found while climbing typeDef.
-                    uint childCount = 0;
-
-                    TypeDefinition copyTd = typeDef;
-                    do
-                    {
-                        //How many RPCs are in copyTd.
-                        uint copyCount = CodegenSession.RpcProcessor.GetRpcCount(copyTd);
-
-                        /* If not found it this is the first time being
-                         * processed. When this occurs set the value
-                         * to 0. It will be overwritten below if baseCount
-                         * is higher. */
-                        uint previousCopyChildCount = 0;
-                        if (!typeDefCounts.TryGetValue(copyTd, out previousCopyChildCount))
-                            typeDefCounts[copyTd] = 0;
-                        /* If baseCount is higher then replace count for copyTd.
-                         * This can occur when a class is inherited by several types
-                         * and the first processed type might only have 1 rpc, while
-                         * the next has 2. This could be better optimized but to keep
-                         * the code easier to read, it will stay like this. */
-                        if (childCount > previousCopyChildCount)
-                            typeDefCounts[copyTd] = childCount;
-
-                        //Increase baseCount with RPCs found here.
-                        childCount += copyCount;
-
-                        copyTd = copyTd.GetNextBaseClassToProcess();
-                    } while (copyTd != null);
-                }
-
-            }
-
-
-            /* This performs the same functionality as SetChildRpcCounts
-             * but for SyncTypes. */
-            void SetChildSyncTypeCounts(Dictionary<TypeDefinition, uint> typeDefCounts, List<TypeDefinition> tds)
-            {
-                foreach (TypeDefinition typeDef in tds)
-                {
-                    //Number of RPCs found while climbing typeDef.
-                    uint childCount = 0;
-
-                    TypeDefinition copyTd = typeDef;
-                    do
-                    {
-                        //How many RPCs are in copyTd.
-                        uint copyCount = CodegenSession.NetworkBehaviourSyncProcessor.GetSyncTypeCount(copyTd);
-
-                        /* If not found it this is the first time being
-                         * processed. When this occurs set the value
-                         * to 0. It will be overwritten below if baseCount
-                         * is higher. */
-                        uint previousCopyChildCount = 0;
-                        if (!typeDefCounts.TryGetValue(copyTd, out previousCopyChildCount))
-                            typeDefCounts[copyTd] = 0;
-                        /* If baseCount is higher then replace count for copyTd.
-                         * This can occur when a class is inherited by several types
-                         * and the first processed type might only have 1 rpc, while
-                         * the next has 2. This could be better optimized but to keep
-                         * the code easier to read, it will stay like this. */
-                        if (childCount > previousCopyChildCount)
-                            typeDefCounts[copyTd] = childCount;
-
-                        //Increase baseCount with RPCs found here.
-                        childCount += copyCount;
-
-                        copyTd = copyTd.GetNextBaseClassToProcess();
-                    } while (copyTd != null);
-                }
-            }
-
-
+            //Moment a NetworkBehaviour exist the assembly is considered modified.
+            bool modified = (networkBehaviourTypeDefs.Count > 0);
             return modified;
         }
 
@@ -473,17 +399,16 @@ namespace FishNet.CodeGenerating.ILCore
         /// </summary>
         /// <param name="moduleDef"></param>
         /// <param name="diagnostics"></param>
-        private bool CreateGenericReadWriteDelegates()
+        private bool CreateSerializerInitializeDelegates(CodegenSession session)
         {
-            bool modified = false;
-            modified |= CodegenSession.WriterHelper.CreateGenericDelegates();
-            modified |= CodegenSession.ReaderHelper.CreateGenericDelegates();
+            session.GetClass<WriterProcessor>().CreateInitializeDelegates();
+            session.GetClass<ReaderProcessor>().CreateInitializeDelegates();
 
-            return modified;
+            return true;
         }
 
         internal static bool IsFishNetAssembly(ICompiledAssembly assembly) => (assembly.Name == FishNetILPP.RUNTIME_ASSEMBLY_NAME);
-        internal static bool IsFishNetAssembly() => (CodegenSession.Module.Assembly.Name.Name == FishNetILPP.RUNTIME_ASSEMBLY_NAME);
+        internal static bool IsFishNetAssembly(CodegenSession session) => (session.Module.Assembly.Name.Name == FishNetILPP.RUNTIME_ASSEMBLY_NAME);
         internal static bool IsFishNetAssembly(ModuleDefinition moduleDef) => (moduleDef.Assembly.Name.Name == FishNetILPP.RUNTIME_ASSEMBLY_NAME);
 
     }

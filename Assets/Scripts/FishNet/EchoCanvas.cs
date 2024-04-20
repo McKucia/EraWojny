@@ -1,4 +1,5 @@
 using FishNet.Object;
+using FishNet.Transporting;
 using TMPro;
 using UnityEngine;
 
@@ -40,7 +41,7 @@ public class EchoCanvas : NetworkBehaviour
         ClientManager.UnregisterBroadcast<ChatMsg>(OnChatMsg);
     }
 
-    private void OnChatMsg(ChatMsg msg)
+    private void OnChatMsg(ChatMsg msg, Channel channel = Channel.Reliable)
     {
         _text.text += msg.Text + "\n";
     }

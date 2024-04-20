@@ -1,13 +1,15 @@
 using FishNet.Component.ColliderRollback;
 using FishNet.Managing;
 using FishNet.Managing.Client;
-using FishNet.Managing.Logging;
+using FishNet.Managing.Predicting;
 using FishNet.Managing.Scened;
 using FishNet.Managing.Server;
 using FishNet.Managing.Statistic;
 using FishNet.Managing.Timing;
 using FishNet.Managing.Transporting;
 using FishNet.Utility;
+using GameKit.Dependencies.Utilities;
+using System;
 using System.Linq;
 using UnityEngine;
 
@@ -36,10 +38,7 @@ namespace FishNet
                     {
                         _networkManager = NetworkManager.Instances.First();
                         if (managersCount > 1)
-                        {
-                            if (_networkManager.CanLog(LoggingType.Warning))
-                                Debug.LogWarning($"Multiple NetworkManagers found, the first result will be returned. If you only wish to have one NetworkManager then uncheck 'Allow Multiple' within your NetworkManagers.");
-                        }
+                            _networkManager.LogWarning($"Multiple NetworkManagers found, the first result will be returned. If you only wish to have one NetworkManager then uncheck 'Allow Multiple' within your NetworkManagers.");
                     }
                     //No managers.
                     else
@@ -127,6 +126,17 @@ namespace FishNet
             }
         }
         /// <summary>
+        /// Returns the first instance of PredictionManager.
+        /// </summary>
+        public static PredictionManager PredictionManager
+        {
+            get
+            {
+                NetworkManager nm = NetworkManager;
+                return (nm == null) ? null : nm.PredictionManager;
+            }
+        }
+        /// <summary>
         /// Returns the first instance of StatisticsManager.
         /// </summary>
         public static StatisticsManager StatisticsManager
@@ -138,30 +148,43 @@ namespace FishNet
             }
         }
 
+        #region Obsoletes
+        [Obsolete("Use IsClientOnlyStarted. Note the difference between IsClientOnlyInitialized and IsClientOnlyStarted.")]
+        public static bool IsClientOnly => IsClientOnlyStarted;
+        [Obsolete("Use IsServerOnlyStarted. Note the difference between IsServerOnlyInitialized and IsServerOnlyStarted.")]
+        public static bool IsServerOnly => IsServerOnlyStarted;
+        [Obsolete("Use IsHostStarted. Note the difference between IsHostInitialized and IsHostStarted.")]
+        public static bool IsHost => IsHostStarted;
+        [Obsolete("Use IsClientStarted. Note the difference between IsClientInitialized and IsClientStarted.")]
+        public static bool IsClient => IsClientStarted;
+        [Obsolete("Use IsServerStarted. Note the difference between IsServerInitialized and IsServerStarted.")]
+        public static bool IsServer => IsServerStarted;
+        #endregion
+
         /// <summary>
         /// True if the server is active.
         /// </summary>
-        public static bool IsServer => (NetworkManager == null) ? false : NetworkManager.IsServer;
+        public static bool IsServerStarted => (NetworkManager == null) ? false : NetworkManager.IsServerStarted;
         /// <summary>
-        /// True if only the server is active.
+        /// True if only the server is started.
         /// </summary>
-        public static bool IsServerOnly => (NetworkManager == null) ? false : NetworkManager.IsServerOnly;
+        public static bool IsServerOnlyStarted => (NetworkManager == null) ? false : NetworkManager.IsServerOnlyStarted;
         /// <summary>
-        /// True if the client is active and authenticated.
+        /// True if the client is started and authenticated.
         /// </summary>
-        public static bool IsClient => (NetworkManager == null) ? false : NetworkManager.IsClient;
+        public static bool IsClientStarted => (NetworkManager == null) ? false : NetworkManager.IsClientStarted;
         /// <summary>
-        /// True if only the client is active and authenticated.
+        /// True if only the client is started and authenticated.
         /// </summary>
-        public static bool IsClientOnly => (NetworkManager == null) ? false : NetworkManager.IsClientOnly;
+        public static bool IsClientOnlyStarted => (NetworkManager == null) ? false : NetworkManager.IsClientOnlyStarted;
         /// <summary>
-        /// True if client and server are active.
+        /// True if client and server are started.
         /// </summary>
-        public static bool IsHost => (NetworkManager == null) ? false : NetworkManager.IsHost;
+        public static bool IsHostStarted => (NetworkManager == null) ? false : NetworkManager.IsHostStarted;
         /// <summary>
-        /// True if client nor server are active.
+        /// True if client nor server are started.
         /// </summary>
-        public static bool IsOffline => (NetworkManager == null) ? true : (!NetworkManager.IsServer && !NetworkManager.IsClient);
+        public static bool IsOffline => (_networkManager == null) ? true : (!NetworkManager.IsServerStarted && !NetworkManager.IsClientStarted);
         #endregion
 
         #region Private.
@@ -171,6 +194,59 @@ namespace FishNet
         private static NetworkManager _networkManager;
         #endregion
 
+        #region Registered components
+        /// <summary>
+        /// Registers to invoke an action when a specified component becomes registered. Action will invoke immediately if already registered.
+        /// </summary>
+        /// <typeparam name="T">Component type.</typeparam>
+        /// <param name="handler">Action to invoke.</param>
+        public static void RegisterInvokeOnInstance<T>(Action<UnityEngine.Component> handler) where T : UnityEngine.Component => NetworkManager?.RegisterInvokeOnInstance<T>(handler);
+        /// <summary>
+        /// Unrgisters to invoke an action when a specified component becomes registered. Action will invoke immediately if already registered.
+        /// </summary>
+        /// <typeparam name="T">Component type.</typeparam>
+        /// <param name="handler">Action to invoke.</param>
+        public static void UnregisterInvokeOnInstance<T>(Action<UnityEngine.Component> handler) where T : UnityEngine.Component => NetworkManager?.UnregisterInvokeOnInstance<T>(handler);
+        /// <summary>
+        /// Returns class of type if found within CodegenBase classes.
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <returns></returns>
+        public static T GetInstance<T>() where T : UnityEngine.Component => NetworkManager?.GetInstance<T>();
+        /// <summary>
+        /// Returns if class of type is registered with the NetworkManager.
+        /// </summary>
+        /// <typeparam name="T">Type to check for.</typeparam>
+        /// <returns></returns>
+        public static bool HasInstance<T>() where T : UnityEngine.Component => (NetworkManager == null) ? false : NetworkManager.HasInstance<T>();
+        /// <summary>
+        /// Registers a new component to this NetworkManager.
+        /// </summary>
+        /// <typeparam name="T">Type to register.</typeparam>
+        /// <param name="component">Reference of the component being registered.</param>
+        /// <param name="replace">True to replace existing references.</param>
+        public static void RegisterInstance<T>(T component, bool replace = true) where T : UnityEngine.Component => NetworkManager?.RegisterInstance<T>(component, replace);
+        /// <summary>
+        /// Tries to registers a new component to this NetworkManager.
+        /// This will not register the instance if another already exists.
+        /// </summary>
+        /// <typeparam name="T">Type to register.</typeparam>
+        /// <param name="component">Reference of the component being registered.</param>
+        /// <returns>True if was able to register, false if an instance is already registered.</returns>
+        public static bool TryRegisterInstance<T>(T component) where T : UnityEngine.Component => (NetworkManager == null) ? false : NetworkManager.TryRegisterInstance<T>(component);
+        /// <summary>
+        /// Returns class of type from registered instances.
+        /// </summary>
+        /// <param name="component">Outputted component.</param>
+        /// <typeparam name="T">Type to get.</typeparam>
+        /// <returns>True if was able to get instance.</returns>
+        public static bool TryGetInstance<T>(out T component) where T : UnityEngine.Component => NetworkManager.TryGetInstance<T>(out component);
+        /// <summary>
+        /// Unregisters a component from this NetworkManager.
+        /// </summary>
+        /// <typeparam name="T">Type to unregister.</typeparam>
+        public static void UnregisterInstance<T>() where T : UnityEngine.Component => NetworkManager?.UnregisterInstance<T>();
+        #endregion
 
     }
 

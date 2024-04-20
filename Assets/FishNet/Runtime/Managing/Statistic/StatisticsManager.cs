@@ -3,6 +3,8 @@ using UnityEngine;
 namespace FishNet.Managing.Statistic
 {
 
+    [DisallowMultipleComponent]
+    [AddComponentMenu("FishNet/Manager/StatisticsManager")]
     public class StatisticsManager : MonoBehaviour
     {
         /// <summary>
@@ -10,9 +12,9 @@ namespace FishNet.Managing.Statistic
         /// </summary>
         public NetworkTraficStatistics NetworkTraffic = new NetworkTraficStatistics();
 
-        internal void InitializeOnceInternal(NetworkManager manager)
+        internal void InitializeOnce_Internal(NetworkManager manager)
         {
-            NetworkTraffic.InitializeOnceInternal(manager);
+            NetworkTraffic.InitializeOnce_Internal(manager);
         }
   
     }
